@@ -4,6 +4,7 @@ import (
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"fmt"
 )
 
@@ -25,35 +26,30 @@ type Handshake struct {
 	PubSign ed25519.PublicKey
 }
 
-type Offer struct {
-	Secret       string
-	SolvedSecret string
-	SDP          []byte
-}
-
 type SignalType uint16
 
 const (
-	SignalTypeNeedInvite SignalType = iota
-	SignalTypeNeedNewbieInvite
-	SignalTypeRedyToInviteNewbie
-	SignalTypeReadyToInvite
-	SignalTypeWaitOffer
-	SignalTypeSendInvite
-	SignalTypeInvite
-	SignalTypeOffer
-	SignalTypeAnswer
-	SignalTypeConnectionSecret
-	SignalTypeConnectionProof
-	SignalTypeTrusted
+	SignalNeedInvite SignalType = iota
+	SignalNeedNewbieInvite
+	SignalRedyToInviteNewbie
+	SignalReadyToInvite
+	SignalWaitOffer
+	SignalWaitAnswer
+	SignalAnswer
+	SignalConnectionSecret
+	SignalConnectionProof
+	SignalTrusted
 )
 
 const (
+	PubKeyLength           = 65
+	PubSignLength          = 65
+	SecretLength           = 26
 	NonceLength            = 26
 	RecipientLength        = 64
 	AuthorLength           = 64
 	ConnectionSecretLength = 26
-	MinLengh               = NonceLength + RecipientLength + AuthorLength + 1
+	MinSignalLength        = NonceLength + RecipientLength + AuthorLength + 1
 )
 
 func newSignal(
@@ -72,7 +68,7 @@ func newSignal(
 }
 
 func (s *Signal) Unmarshal(b []byte) error {
-	if len(b) < MinLengh {
+	if len(b) < MinSignalLength {
 		return fmt.Errorf("too small signal len=%d", len(b))
 	}
 
@@ -83,7 +79,7 @@ func (s *Signal) Unmarshal(b []byte) error {
 	s.Type = SignalType(b[pos])
 	pos++
 
-	if s.Type > SignalTypeTrusted {
+	if s.Type > SignalTrusted {
 		return fmt.Errorf("unknown signal type: %d", s.Type)
 	}
 
@@ -97,7 +93,7 @@ func (s *Signal) Unmarshal(b []byte) error {
 }
 
 func (s Signal) Marshal() []byte {
-	out := make([]byte, MinLengh+len(s.Payload))
+	out := make([]byte, MinSignalLength+len(s.Payload))
 	pos := 0
 	pos += copy(out[pos:], []byte(s.Nonce))
 	out[pos] = byte(s.Type)
@@ -114,6 +110,10 @@ func (s ReadyToInviteNewbie) Marshal() []byte {
 }
 
 func (s *ReadyToInviteNewbie) Unmarshal(b []byte) error {
+	if len(b) < ConnectionSecretLength+MinSignalLength {
+		return errors.New("too small")
+	}
+
 	s.ConnectionSecret = string(b[:ConnectionSecretLength])
 	err := s.Signal.Unmarshal(b[ConnectionSecretLength:])
 	if err != nil {
@@ -132,22 +132,16 @@ func (s Handshake) Marshal() []byte {
 }
 
 func (s *Handshake) Unmarshal(b []byte) error {
-	pubKey, err := ecdh.P256().NewPublicKey(b[:65])
+	if len(b) < PubKeyLength+PubSignLength {
+		return errors.New("too small")
+	}
+
+	pubKey, err := ecdh.P256().NewPublicKey(b[:PubKeyLength])
 	if err != nil {
 		return err
 	}
 	s.PubKey = pubKey
-	s.PubSign = ed25519.PublicKey(b[65:])
+	s.PubSign = ed25519.PublicKey(b[PubKeyLength:])
 
 	return nil
-}
-
-func (s Offer) Marshal() []byte {
-	out := make([]byte, 0, len(s.Secret)+len(s.SolvedSecret)+len(s.SDP))
-	pos := 0
-	pos += copy(out[pos:], []byte(s.Secret))
-	pos += copy(out[pos:], []byte(s.SolvedSecret))
-	pos += copy(out[pos:], s.SDP)
-
-	return out
 }

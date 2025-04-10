@@ -1,10 +1,9 @@
 package network
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"go-chat/pkg/crypt"
 	"sync"
@@ -13,23 +12,28 @@ import (
 )
 
 var handlers = map[SignalType]func(*Network, Signal){
-	SignalTypeNeedNewbieInvite: processNeedNewbieInvite,
-	SignalTypeSendInvite:       processSignalTypeSendInvite,
-	SignalTypeInvite:           processSignalTypeInvite,
-	SignalTypeOffer:            processSignalTypeOffer,
-	SignalTypeAnswer:           processSignalTypeAnswer,
-	SignalTypeConnectionSecret: processSignalTypeConnectionSecret,
-	SignalTypeConnectionProof:  processSignalTypeConnectionProof,
-	SignalTypeTrusted:          processSignalTypeTrusted,
+	SignalNeedNewbieInvite:   processNeedNewbieInvite,
+	SignalRedyToInviteNewbie: processReadyToInviteNewbie,
+	SignalReadyToInvite:      processReadyToInvite,
+	SignalWaitOffer:          processWaitOffer,
+	SignalWaitAnswer:         processWaitAnswer,
 }
 
-func (n *Network) dispatch(in <-chan Signal) {
-	for s := range in {
-		h, ok := handlers[s.Type]
-		if !ok {
+func (n *Network) dispatch(ctx context.Context, in <-chan Signal) {
+	for {
+		select {
+		case <-ctx.Done():
 			return
+		case s, ok := <-in:
+			if !ok {
+				return
+			}
+			h, ok := handlers[s.Type]
+			if !ok {
+				return
+			}
+			h(n, s)
 		}
-		h(n, s)
 	}
 }
 
@@ -62,14 +66,14 @@ func processNeedNewbieInvite(n *Network, in Signal) {
 		PubSign: n.pubSignature,
 	}
 
-	toNewbie := newSignal(SignalTypeReadyToInvite, peer.hash, n.hash, outh.Marshal())
+	toNewbie := newSignal(SignalReadyToInvite, peer.hash, n.hash, outh.Marshal())
 
 	readyToInvite := ReadyToInviteNewbie{
 		ConnectionSecret: rand.Text(),
 		Signal:           toNewbie,
 	}
 
-	out := newSignal(SignalTypeRedyToInviteNewbie, in.Author, n.hash, readyToInvite.Marshal())
+	out := newSignal(SignalRedyToInviteNewbie, in.Author, n.hash, readyToInvite.Marshal())
 
 	n.broadcast(out)
 }
@@ -133,7 +137,7 @@ func processReadyToInvite(n *Network, in Signal) {
 
 	signature := ed25519.Sign(n.privSign, encryptedSecret)
 	payload := append(encryptedSecret, signature...)
-	out := newSignal(SignalTypeWaitOffer, in.Author, n.hash, payload)
+	out := newSignal(SignalWaitOffer, in.Author, n.hash, payload)
 
 	n.broadcast(out)
 }
@@ -146,18 +150,8 @@ func processWaitOffer(n *Network, in Signal) {
 
 	n.answererQueueeMu.Lock()
 	defer n.answererQueueeMu.Unlock()
-	answerWaiter, ok := n.answererQueuee[in.Author]
+	answerer, ok := n.answererQueuee[in.Author]
 	if !ok {
-		return
-	}
-
-	secret, senderSignature := crypt.SplitSignature(in.Payload)
-	if !ed25519.Verify(answerWaiter.peer.signature, secret, senderSignature) {
-		return
-	}
-
-	decryptedSecret, err := crypt.Decrypt(secret, n.privKey, answerWaiter.peer.pubKey)
-	if err != nil {
 		return
 	}
 
@@ -199,7 +193,7 @@ func processWaitOffer(n *Network, in Signal) {
 			close(inbox)
 		})
 
-		outbox := n.interact(answerWaiter.peer, inbox)
+		outbox := n.interact(answerer.peer, inbox)
 		go func() {
 			defer disconnect()
 
@@ -241,13 +235,7 @@ func processWaitOffer(n *Network, in Signal) {
 		return
 	}
 
-	of := Offer{
-		Secret:       answerWaiter.expectedSecret,
-		SolvedSecret: string(decryptedSecret),
-		SDP:          SDP,
-	}
-
-	encryptedPayload, err := crypt.Encrypt(of.Marshal(), n.privKey, answerWaiter.peer.pubKey)
+	encryptedPayload, err := crypt.Encrypt(SDP, n.privKey, answerer.peer.pubKey)
 	if err != nil {
 		return
 	}
@@ -255,23 +243,162 @@ func processWaitOffer(n *Network, in Signal) {
 	signature := ed25519.Sign(n.privSign, encryptedPayload)
 	encryptedPayload = append(encryptedPayload, signature...)
 
-	n.broadcast(newSignal(SignalTypeOffer, in.Author, n.hash, encryptedPayload))
+	answerer.pc = pc
+	answerer.dc = dc
+
+	n.broadcast(newSignal(SignalWaitAnswer, in.Author, n.hash, encryptedPayload))
 }
 
-func processSignalTypeSendInvite(n *Network, s Signal) {
+func processWaitAnswer(n *Network, in Signal) {
+	if n.hash != in.Recipient {
+		n.broadcast(in)
+		return
+	}
 
+	n.offererQueueeMu.Lock()
+	defer n.offererQueueeMu.Unlock()
+
+	offerer, ok := n.offererQueuee[in.Author]
+	if !ok {
+		return
+	}
+
+	payload, sign := crypt.SplitSignature(in.Payload)
+	if !ed25519.Verify(offerer.peer.signature, payload, sign) {
+		return
+	}
+
+	decryptedPayload, err := crypt.Decrypt(payload, n.privKey, offerer.peer.pubKey)
+	if err != nil {
+		return
+	}
+
+	var sd webrtc.SessionDescription
+	err = json.Unmarshal(decryptedPayload, &sd)
+	if err != nil {
+		return
+	}
+
+	config := webrtc.Configuration{
+		ICEServers: []webrtc.ICEServer{
+			{
+				URLs: []string{
+					"stun:stun.l.google.com:19302",
+				},
+			},
+		},
+	}
+
+	pc, err := webrtc.NewPeerConnection(config)
+	defer func() {
+		if err != nil {
+			pc.Close()
+		}
+	}()
+	if err != nil {
+		return
+	}
+
+	pc.OnDataChannel(func(dataChannel *webrtc.DataChannel) {
+		dataChannel.OnOpen(func() {
+			inbox := make(chan Signal)
+			disconnect := sync.OnceFunc(func() {
+				close(inbox)
+			})
+
+			outbox := n.interact(offerer.peer, inbox)
+			go func() {
+				defer disconnect()
+
+				for s := range outbox {
+					err := dataChannel.Send(s.Marshal())
+					if err != nil {
+						return
+					}
+				}
+			}()
+
+			dataChannel.OnMessage(func(msg webrtc.DataChannelMessage) {
+				if len(msg.Data) > maxSignalSize {
+					disconnect()
+					return
+				}
+
+				var s Signal
+				s.Unmarshal(msg.Data)
+				inbox <- s
+			})
+
+			dataChannel.OnClose(func() {
+				disconnect()
+			})
+		})
+	})
+
+	err = pc.SetRemoteDescription(sd)
+	if err != nil {
+		return
+	}
+
+	answer, err := pc.CreateAnswer(nil)
+	if err != nil {
+		return
+	}
+
+	gatherComplete := webrtc.GatheringCompletePromise(pc)
+
+	err = pc.SetLocalDescription(answer)
+	if err != nil {
+		return
+	}
+
+	<-gatherComplete
+	anserSDP, err := json.Marshal(pc.LocalDescription())
+	if err != nil {
+		return
+	}
+
+	encryptedPayload, err := crypt.Encrypt(anserSDP, n.privKey, offerer.peer.pubKey)
+	if err != nil {
+		return
+	}
+
+	signature := ed25519.Sign(n.privSign, encryptedPayload)
+
+	n.broadcast(newSignal(SignalAnswer, in.Author, n.hash, append(encryptedPayload, signature...)))
 }
 
-func processSignalTypeInvite(n *Network, s Signal) {
+func processAnswer(n *Network, in Signal) {
+	if n.hash != in.Recipient {
+		n.broadcast(in)
+		return
+	}
 
-}
+	n.answererQueueeMu.Lock()
+	defer n.answererQueueeMu.Unlock()
 
-func processSignalTypeOffer(n *Network, s Signal) {
+	answerer, ok := n.answererQueuee[in.Author]
+	if !ok {
+		return
+	}
 
-}
+	payload, sign := crypt.SplitSignature(in.Payload)
+	if !ed25519.Verify(answerer.peer.signature, payload, sign) {
+		return
+	}
 
-func processSignalTypeAnswer(n *Network, s Signal) {
+	decryptedPayload, err := crypt.Decrypt(payload, n.privKey, answerer.peer.pubKey)
+	if err != nil {
+		return
+	}
 
+	var answer webrtc.SessionDescription
+	err = json.Unmarshal(decryptedPayload, &answer)
+	if err != nil {
+		return
+	}
+
+	answerer.pc.SetRemoteDescription(answer)
 }
 
 func processSignalTypeConnectionSecret(n *Network, s Signal) {

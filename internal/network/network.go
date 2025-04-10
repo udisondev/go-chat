@@ -1,12 +1,17 @@
 package network
 
 import (
+	"context"
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
+	"go-chat/pkg/closer"
+	"runtime"
 	"sync"
 	"sync/atomic"
+
+	"github.com/pion/webrtc/v4"
 )
 
 type (
@@ -32,6 +37,8 @@ type (
 		answererQueueeMu sync.RWMutex
 		answererQueuee   map[string]*answerer
 
+		inbox chan Signal
+
 		cache *cache
 	}
 
@@ -52,13 +59,40 @@ type (
 	offerer struct {
 		peer           *peer
 		expectedSecret string
+		pc             *webrtc.PeerConnection
+		dc             *webrtc.DataChannel
 	}
 
 	answerer struct {
 		peer           *peer
 		expectedSecret string
+		pc             *webrtc.PeerConnection
+		dc             *webrtc.DataChannel
 	}
 )
+
+func (n *Network) Run(ctx context.Context) {
+	inbox := make(chan Signal)
+	defer close(inbox)
+
+	wg := sync.WaitGroup{}
+	workerCtx, stop := context.WithCancel(ctx)
+	closer.Add(func() error {
+		stop()
+		return nil
+	})
+
+	for range runtime.NumCPU() {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+			n.dispatch(workerCtx, inbox)
+		}()
+	}
+
+	wg.Wait()
+}
 
 func (n *Network) newPeer(
 	pubKey *ecdh.PublicKey,
@@ -120,7 +154,9 @@ func (n *Network) interact(p *peer, inbox <-chan Signal) <-chan Signal {
 	go func() {
 		defer p.disconnect()
 
-		n.dispatch(n.filter(inbox))
+		for s := range n.filter(inbox) {
+			n.inbox <- s
+		}
 	}()
 
 	return outbox
