@@ -17,7 +17,7 @@ type Signal struct {
 }
 
 type ReadyToInviteNewbie struct {
-	ConnectionSecret string
+	ConnectionProof string
 	Signal
 }
 
@@ -51,6 +51,8 @@ const (
 	ConnectionSecretLength = 26
 	MinSignalLength        = NonceLength + RecipientLength + AuthorLength + 1
 )
+
+var recepientPlaceholder = string(make([]byte, 65))
 
 func newSignal(
 	t SignalType,
@@ -99,6 +101,9 @@ func (s Signal) Marshal() []byte {
 	out[pos] = byte(s.Type)
 	pos++
 	pos += copy(out[pos:], []byte(s.Author))
+	if s.Recipient == "" {
+		s.Recipient = recepientPlaceholder
+	}
 	pos += copy(out[pos:], []byte(s.Recipient))
 	copy(out[pos:], s.Payload)
 
@@ -106,7 +111,7 @@ func (s Signal) Marshal() []byte {
 }
 
 func (s ReadyToInviteNewbie) Marshal() []byte {
-	return append([]byte(s.ConnectionSecret), s.Signal.Marshal()...)
+	return append([]byte(s.ConnectionProof), s.Signal.Marshal()...)
 }
 
 func (s *ReadyToInviteNewbie) Unmarshal(b []byte) error {
@@ -114,7 +119,7 @@ func (s *ReadyToInviteNewbie) Unmarshal(b []byte) error {
 		return errors.New("too small")
 	}
 
-	s.ConnectionSecret = string(b[:ConnectionSecretLength])
+	s.ConnectionProof = string(b[:ConnectionSecretLength])
 	err := s.Signal.Unmarshal(b[ConnectionSecretLength:])
 	if err != nil {
 		return err

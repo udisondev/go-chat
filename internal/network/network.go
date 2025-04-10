@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"go-chat/pkg/closer"
+	"log/slog"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -16,26 +17,23 @@ import (
 
 type (
 	Network struct {
-		hash string
-
-		privKey *ecdh.PrivateKey
-
+		logger       *slog.Logger
+		hash         string
+		privKey      *ecdh.PrivateKey
 		privSign     ed25519.PrivateKey
 		pubSignature ed25519.PublicKey
 
 		freeSlots atomic.Int32
-
-		peersMu sync.RWMutex
-		peers   map[string]*peer
+		peersMu   sync.RWMutex
+		peers     map[string]*peer
 
 		onboardingMu sync.RWMutex
 		onboarding   map[string]*newbie
 
-		offererQueueeMu sync.RWMutex
-		offererQueuee   map[string]*offerer
-
-		answererQueueeMu sync.RWMutex
-		answererQueuee   map[string]*answerer
+		respondersMu     sync.RWMutex
+		respondersQueuee map[string]*responder
+		initianorsMu     sync.RWMutex
+		initiatorQueuee  map[string]*initiator
 
 		inbox chan Signal
 
@@ -51,23 +49,23 @@ type (
 	}
 
 	newbie struct {
-		mu      sync.Mutex
-		secrets map[string]string
-		peer    *peer
+		mu          sync.Mutex
+		secrets     map[string]string
+		connections int
+		peer        *peer
 	}
 
-	offerer struct {
-		peer           *peer
-		expectedSecret string
-		pc             *webrtc.PeerConnection
-		dc             *webrtc.DataChannel
+	responder struct {
+		peer *peer
+		pc   *webrtc.PeerConnection
+		dc   *webrtc.DataChannel
 	}
 
-	answerer struct {
-		peer           *peer
-		expectedSecret string
-		pc             *webrtc.PeerConnection
-		dc             *webrtc.DataChannel
+	initiator struct {
+		peer            *peer
+		connectionProof string
+		pc              *webrtc.PeerConnection
+		dc              *webrtc.DataChannel
 	}
 )
 
@@ -112,6 +110,7 @@ func (n *Network) interact(p *peer, inbox <-chan Signal) <-chan Signal {
 
 	sum := sha256.Sum256(p.pubKey.Bytes())
 	hash := hex.EncodeToString(sum[:])
+	log := n.logger.With("peer", hash)
 
 	disconnected := atomic.Bool{}
 	mu := sync.RWMutex{}
@@ -120,8 +119,11 @@ func (n *Network) interact(p *peer, inbox <-chan Signal) <-chan Signal {
 		defer mu.Unlock()
 
 		if !disconnected.CompareAndSwap(false, true) {
+			log.Warn("Already disconnected!")
 			return
 		}
+
+		n.freeSlots.Add(-1)
 
 		n.peersMu.Lock()
 		defer n.peersMu.Unlock()
@@ -180,6 +182,11 @@ func (n *Network) filter(in <-chan Signal) <-chan Signal {
 	return out
 }
 
-func (n *Network) broadcast(s Signal, excludes ...string) {
+func (n *Network) broadcast(s Signal) {
+	n.peersMu.RLock()
+	defer n.peersMu.Unlock()
 
+	for _, p := range n.peers {
+		go p.send(s)
+	}
 }
