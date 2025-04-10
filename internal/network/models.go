@@ -4,7 +4,6 @@ import (
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 )
 
@@ -22,13 +21,14 @@ type ReadyToInviteNewbie struct {
 }
 
 type Handshake struct {
-	PublicKey *ecdh.PublicKey
-	Signature ed25519.PublicKey
+	PubKey  *ecdh.PublicKey
+	PubSign ed25519.PublicKey
 }
 
 type Offer struct {
-	Secret []byte
-	SDP    []byte
+	Secret       string
+	SolvedSecret string
+	SDP          []byte
 }
 
 type SignalType uint16
@@ -124,9 +124,9 @@ func (s *ReadyToInviteNewbie) Unmarshal(b []byte) error {
 }
 
 func (s Handshake) Marshal() []byte {
-	out := make([]byte, len(s.PublicKey.Bytes())+len(s.Signature))
-	copy(out, s.PublicKey.Bytes())
-	copy(out[len(s.PublicKey.Bytes()):], s.Signature)
+	out := make([]byte, len(s.PubKey.Bytes())+len(s.PubSign))
+	copy(out, s.PubKey.Bytes())
+	copy(out[len(s.PubKey.Bytes()):], s.PubSign)
 
 	return out
 }
@@ -136,8 +136,18 @@ func (s *Handshake) Unmarshal(b []byte) error {
 	if err != nil {
 		return err
 	}
-	s.PublicKey = pubKey
-	s.Signature = ed25519.PublicKey(b[65:])
+	s.PubKey = pubKey
+	s.PubSign = ed25519.PublicKey(b[65:])
 
 	return nil
+}
+
+func (s Offer) Marshal() []byte {
+	out := make([]byte, 0, len(s.Secret)+len(s.SolvedSecret)+len(s.SDP))
+	pos := 0
+	pos += copy(out[pos:], []byte(s.Secret))
+	pos += copy(out[pos:], []byte(s.SolvedSecret))
+	pos += copy(out[pos:], s.SDP)
+
+	return out
 }

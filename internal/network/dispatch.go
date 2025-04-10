@@ -1,14 +1,15 @@
 package network
 
 import (
-	"context"
-	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"go-chat/pkg/crypt"
-	"time"
+	"sync"
+
+	"github.com/pion/webrtc/v4"
 )
 
 var handlers = map[SignalType]func(*Network, Signal){
@@ -45,12 +46,15 @@ func processNeedNewbieInvite(n *Network, in Signal) {
 		return
 	}
 
-	n.queueeMu.Lock()
-	defer n.queueeMu.Unlock()
+	expectedSecret := rand.Text()
 
-	n.queuee[in.Author] = &peer{
-		pubKey:    inh.PubKey,
-		signature: inh.PubSign,
+	n.answererQueueeMu.Lock()
+	defer n.answererQueueeMu.Unlock()
+
+	peer := n.newPeer(inh.PubKey, inh.PubSign)
+	n.answererQueuee[peer.hash] = &answerer{
+		peer:           peer,
+		expectedSecret: expectedSecret,
 	}
 
 	outh := Handshake{
@@ -58,9 +62,7 @@ func processNeedNewbieInvite(n *Network, in Signal) {
 		PubSign: n.pubSignature,
 	}
 
-	sum := sha256.Sum256(inh.PubKey.Bytes())
-	recipient := hex.EncodeToString(sum[:])
-	toNewbie := newSignal(SignalTypeReadyToInvite, recipient, n.hash, outh.Marshal())
+	toNewbie := newSignal(SignalTypeReadyToInvite, peer.hash, n.hash, outh.Marshal())
 
 	readyToInvite := ReadyToInviteNewbie{
 		ConnectionSecret: rand.Text(),
@@ -84,8 +86,8 @@ func processReadyToInviteNewbie(n *Network, in Signal) {
 		return
 	}
 
-	n.queueeMu.RLock()
-	defer n.queueeMu.RUnlock()
+	n.offererQueueeMu.RLock()
+	defer n.offererQueueeMu.RUnlock()
 	inviteWaiter, ok := n.onboarding[rinv.Signal.Recipient]
 	if !ok {
 		return
@@ -96,16 +98,9 @@ func processReadyToInviteNewbie(n *Network, in Signal) {
 	if len(inviteWaiter.secrets) > reqConns {
 		return
 	}
-
 	inviteWaiter.secrets[rinv.Author] = rinv.ConnectionSecret
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	err = inviteWaiter.peer.Send(ctx, rinv.Signal)
-	if err != nil {
-		return
-	}
+	inviteWaiter.peer.send(rinv.Signal)
 }
 
 func processReadyToInvite(n *Network, in Signal) {
@@ -120,14 +115,18 @@ func processReadyToInvite(n *Network, in Signal) {
 		return
 	}
 
-	n.queueeMu.Lock()
-	defer n.queueeMu.Unlock()
-	n.queuee[in.Author] = &peer{
-		pubKey:    h.PubKey,
-		signature: h.PubSign,
+	expectedSecret := rand.Text()
+
+	n.offererQueueeMu.Lock()
+	defer n.offererQueueeMu.Unlock()
+
+	peer := n.newPeer(h.PubKey, h.PubSign)
+	n.offererQueuee[peer.hash] = &offerer{
+		peer:           peer,
+		expectedSecret: expectedSecret,
 	}
 
-	encryptedSecret, err := crypt.Encrypt([]byte(rand.Text()), n.privKey, h.PubKey)
+	encryptedSecret, err := crypt.Encrypt([]byte(expectedSecret), n.privKey, h.PubKey)
 	if err != nil {
 		return
 	}
@@ -145,66 +144,118 @@ func processWaitOffer(n *Network, in Signal) {
 		return
 	}
 
-	n.queueeMu.Lock()
-	defer n.queueeMu.Unlock()
-	offerWaiter, ok := n.queuee[in.Author]
+	n.answererQueueeMu.Lock()
+	defer n.answererQueueeMu.Unlock()
+	answerWaiter, ok := n.answererQueuee[in.Author]
 	if !ok {
 		return
 	}
 
-	sigStart := len(in.Payload) - 64
-	secret := in.Payload[:sigStart]
-	signature := in.Payload[sigStart:]
-	if !ed25519.Verify(offerWaiter.signature, secret, signature) {
+	secret, senderSignature := crypt.SplitSignature(in.Payload)
+	if !ed25519.Verify(answerWaiter.peer.signature, secret, senderSignature) {
 		return
 	}
 
-	decryptedSecret, err := crypt.Decrypt(secret, n.privKey, offerWaiter.pubKey)
+	decryptedSecret, err := crypt.Decrypt(secret, n.privKey, answerWaiter.peer.pubKey)
 	if err != nil {
 		return
 	}
 
-}
-
-func processSignalTypeNeedInvite2(n *Network, s Signal) {
-	if n.freeSlots.Add(1) > maxFreeSlotsCount {
-		n.freeSlots.Add(-1)
-		n.broadcast(s)
+	config := webrtc.Configuration{
+		ICEServers: []webrtc.ICEServer{
+			{
+				URLs: []string{
+					"stun:stun.l.google.com:19302",
+				},
+			},
+		},
+	}
+	pc, err := webrtc.NewPeerConnection(config)
+	if err != nil {
 		return
 	}
 
-	secret := make([]byte, 12)
-	for written := 0; written < 12; {
-		n, err := rand.Read(secret)
-		if err != nil {
+	defer func() {
+		if err == nil {
 			return
 		}
-		written += n
-	}
+		pc.Close()
+	}()
 
-	sign := make([]byte, 32)
-	for written := 0; written < 12; {
-		n, err := rand.Read(sign)
-		if err != nil {
+	dc, err := pc.CreateDataChannel("network", nil)
+	if err != nil {
+		return
+	}
+	defer func() {
+		if err == nil {
 			return
 		}
-		written += n
-	}
+		dc.Close()
+	}()
 
-	pubKey, err := ecdh.P256().NewPublicKey(s.Payload[:65])
+	dc.OnOpen(func() {
+		inbox := make(chan Signal)
+		disconnect := sync.OnceFunc(func() {
+			close(inbox)
+		})
+
+		outbox := n.interact(answerWaiter.peer, inbox)
+		go func() {
+			defer disconnect()
+
+			for s := range outbox {
+				err := dc.Send(s.Marshal())
+				if err != nil {
+					return
+				}
+			}
+		}()
+
+		dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+			if len(msg.Data) > maxSignalSize {
+				disconnect()
+				return
+			}
+
+			var s Signal
+			s.Unmarshal(msg.Data)
+			inbox <- s
+		})
+
+		dc.OnClose(func() {
+			disconnect()
+		})
+	})
+
+	offer, err := pc.CreateOffer(nil)
 	if err != nil {
 		return
 	}
 
-	signature := ed25519.PublicKey(s.Payload[65:])
-	n.queueeMu.Lock()
-	defer n.queueeMu.Unlock()
-	sum := sha256.Sum256(s.Payload[:65])
-	n.queuee[hex.EncodeToString(sum[:])] = newPeer(pubKey, signature)
-	_, err = crypt.Encrypt(sign, n.privKey, pubKey)
+	if err := pc.SetLocalDescription(offer); err != nil {
+		return
+	}
+
+	SDP, err := json.Marshal(pc.LocalDescription())
 	if err != nil {
 		return
 	}
+
+	of := Offer{
+		Secret:       answerWaiter.expectedSecret,
+		SolvedSecret: string(decryptedSecret),
+		SDP:          SDP,
+	}
+
+	encryptedPayload, err := crypt.Encrypt(of.Marshal(), n.privKey, answerWaiter.peer.pubKey)
+	if err != nil {
+		return
+	}
+
+	signature := ed25519.Sign(n.privSign, encryptedPayload)
+	encryptedPayload = append(encryptedPayload, signature...)
+
+	n.broadcast(newSignal(SignalTypeOffer, in.Author, n.hash, encryptedPayload))
 }
 
 func processSignalTypeSendInvite(n *Network, s Signal) {
