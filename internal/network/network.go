@@ -80,7 +80,11 @@ func (n *Network) interact(p *peer, inbox <-chan Signal) <-chan Signal {
 	hash := hex.EncodeToString(sum[:])
 
 	disconnected := atomic.Bool{}
-	disconnect := func() {
+	mu := sync.RWMutex{}
+	disconnect := sync.OnceFunc(func() {
+		mu.Lock()
+		defer mu.Unlock()
+
 		if !disconnected.CompareAndSwap(false, true) {
 			return
 		}
@@ -90,18 +94,22 @@ func (n *Network) interact(p *peer, inbox <-chan Signal) <-chan Signal {
 
 		delete(n.peers, hash)
 		close(outbox)
-	}
+	})
 	p.disconnect = disconnect
 
 	send := func(s Signal) bool {
+		mu.RLock()
 		if disconnected.Load() {
+			mu.RUnlock()
 			return false
 		}
 
 		select {
 		case outbox <- s:
+			mu.RUnlock()
 			return true
 		default:
+			mu.RUnlock()
 			disconnect()
 		}
 
