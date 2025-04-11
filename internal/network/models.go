@@ -150,3 +150,30 @@ func (s *Handshake) Unmarshal(b []byte) error {
 
 	return nil
 }
+
+func (s SignalType) String() string {
+	switch s {
+	case SignalNeedInvite:
+		return "SignalNeedInvite"
+	case SignalNeedNewbieInvite:
+		return "SignalNeedNewbieInvite"
+	case SignalRedyToInviteNewbie:
+		return "SignalRedyToInviteNewbie"
+	case SignalReadyToInvite:
+		return "SignalReadyToInvite"
+	case SignalWaitOffer:
+		return "SignalWaitOffer"
+	case SignalWaitAnswer:
+		return "SignalWaitAnswer"
+	case SignalAnswer:
+		return "SignalAnswer"
+	case SignalConnectionSecret:
+		return "SignalConnectionSecret"
+	case SignalConnectionProof:
+		return "SignalConnectionProof"
+	case SignalTrusted:
+		return "SignalTrusted"
+	}
+
+	return ""
+}

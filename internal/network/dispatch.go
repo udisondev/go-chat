@@ -18,19 +18,28 @@ var handlers = map[SignalType]func(*Network, Signal){
 	SignalReadyToInvite:      processReadyToInvite,
 	SignalWaitOffer:          processWaitOffer,
 	SignalWaitAnswer:         processWaitAnswer,
+	SignalAnswer:             processAnswer,
+	SignalConnectionSecret:   processConnectionSecret,
+	SignalConnectionProof:    processConnectionProof,
+	SignalTrusted:            processTrusted,
 }
 
 func (n *Network) dispatch(ctx context.Context, in <-chan Signal) {
+	log := n.logger.With("method", "dispatch")
 	for {
 		select {
 		case <-ctx.Done():
+			log.Info("Context closed")
 			return
 		case s, ok := <-in:
 			if !ok {
 				return
 			}
+
+			log.Debug("Received", slog.String("signal", s.Type.String()))
 			h, ok := handlers[s.Type]
 			if !ok {
+				log.Debug("Has not suitable handler")
 				return
 			}
 			h(n, s)
@@ -70,6 +79,8 @@ func processNeedNewbieInvite(n *Network, in Signal) {
 		connectionProof: connectionProof,
 	}
 
+	log = log.With("newbie", peer.hash)
+
 	outh := Handshake{
 		PubKey:  n.privKey.PublicKey(),
 		PubSign: n.pubSignature,
@@ -85,6 +96,8 @@ func processNeedNewbieInvite(n *Network, in Signal) {
 	out := newSignal(SignalRedyToInviteNewbie, in.Author, n.hash, readyToInvite.Marshal())
 
 	go n.broadcast(out)
+
+	log.Info("ReadyToInviteNewbie was sent")
 }
 
 func processReadyToInviteNewbie(n *Network, in Signal) {
@@ -108,7 +121,7 @@ func processReadyToInviteNewbie(n *Network, in Signal) {
 		return
 	}
 
-	log.With("newbie", rinv.Recipient)
+	log = log.With("newbie", rinv.Recipient)
 
 	n.respondersMu.RLock()
 	defer n.respondersMu.RUnlock()
@@ -138,6 +151,7 @@ func processReadyToInvite(n *Network, in Signal) {
 		"author",
 		in.Author,
 	)
+
 	if in.Recipient != n.hash {
 		log.Debug("There is not for me")
 		go n.broadcast(in)
@@ -172,6 +186,8 @@ func processReadyToInvite(n *Network, in Signal) {
 	out := newSignal(SignalWaitOffer, in.Author, n.hash, payload)
 
 	go n.broadcast(out)
+
+	log.Info("Wait offer was sent")
 }
 
 func processWaitOffer(n *Network, in Signal) {
@@ -181,6 +197,7 @@ func processWaitOffer(n *Network, in Signal) {
 		"author",
 		in.Author,
 	)
+
 	if n.hash != in.Recipient {
 		log.Debug("There is not for me")
 		go n.broadcast(in)
@@ -270,7 +287,8 @@ func processWaitOffer(n *Network, in Signal) {
 	initiator.dc = dc
 
 	go n.broadcast(newSignal(SignalWaitAnswer, in.Author, n.hash, encryptedPayload))
-	log.Info("Offer was sent")
+
+	log.Info("Wait answer was sent")
 }
 
 func processWaitAnswer(n *Network, in Signal) {
@@ -280,6 +298,7 @@ func processWaitAnswer(n *Network, in Signal) {
 		"author",
 		in.Author,
 	)
+
 	if n.hash != in.Recipient {
 		log.Debug("There is not for me")
 		go n.broadcast(in)
@@ -337,6 +356,7 @@ func processWaitAnswer(n *Network, in Signal) {
 
 	pc.OnDataChannel(func(dataChannel *webrtc.DataChannel) {
 		dataChannel.OnOpen(func() {
+			log := n.logger.With("peer", responder.peer.hash)
 			inbox := make(chan Signal)
 			disconnect := sync.OnceFunc(func() {
 				close(inbox)
@@ -346,6 +366,7 @@ func processWaitAnswer(n *Network, in Signal) {
 			go func() {
 				defer disconnect()
 
+				log.Debug("Outbox is ready")
 				for s := range outbox {
 					err := dataChannel.Send(s.Marshal())
 					if err != nil {
@@ -354,6 +375,7 @@ func processWaitAnswer(n *Network, in Signal) {
 				}
 			}()
 
+			log.Debug("Inbox is ready")
 			dataChannel.OnMessage(func(msg webrtc.DataChannelMessage) {
 				if len(msg.Data) > maxSignalSize {
 					disconnect()
@@ -387,6 +409,7 @@ func processWaitAnswer(n *Network, in Signal) {
 
 	err = pc.SetLocalDescription(answer)
 	if err != nil {
+		log.Error("Set local description", slog.Any("err", err))
 		return
 	}
 
@@ -416,6 +439,7 @@ func processAnswer(n *Network, in Signal) {
 		"author",
 		in.Author,
 	)
+
 	if n.hash != in.Recipient {
 		log.Debug("There is not for me")
 		go n.broadcast(in)
@@ -482,7 +506,7 @@ func processConnectionSecret(n *Network, in Signal) {
 	log.Info("Connection proof was sent")
 }
 
-func processSignalTypeConnectionProof(n *Network, in Signal) {
+func processConnectionProof(n *Network, in Signal) {
 	log := n.logger.With(
 		"method",
 		"processSignalTypeConnectionProof",
@@ -528,7 +552,7 @@ func processSignalTypeConnectionProof(n *Network, in Signal) {
 	delete(n.onboarding, newbie.peer.hash)
 }
 
-func processSignalTypeTrusted(n *Network, in Signal) {
+func processTrusted(n *Network, in Signal) {
 	log := n.logger.With(
 		"method",
 		"processSignalTypeTrusted",
@@ -560,8 +584,10 @@ func processSignalTypeTrusted(n *Network, in Signal) {
 
 	outbox := n.interact(initiator.peer, inbox)
 	go func() {
+		log := n.logger.With("peer", initiator.peer.hash)
 		defer disconnect()
 
+		log.Debug("Oubox is ready")
 		for s := range outbox {
 			err := dc.Send(s.Marshal())
 			if err != nil {
@@ -581,10 +607,11 @@ func processSignalTypeTrusted(n *Network, in Signal) {
 		inbox <- s
 	})
 
+	log.Debug("Inbox is ready")
+
 	dc.OnClose(func() {
 		disconnect()
 	})
 
 	log.Info("Trust")
-
 }
