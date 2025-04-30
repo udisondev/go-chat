@@ -20,7 +20,7 @@ func Attach(ctx context.Context, addr string, mws ...middleware.Middleware) (*Pe
 	if err != nil {
 		return nil, err
 	}
-	p, err := upgradeConn(ctx, conn)
+	p, err := upgradeConn(ctx, conn, mws...)
 	if err != nil {
 		conn.Close()
 		return nil, err
