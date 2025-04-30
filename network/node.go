@@ -9,13 +9,12 @@ import (
 	"go-chat/handshake"
 	"go-chat/middleware"
 	"go-chat/pkg/closer"
-	"io"
 	"log"
 	"net"
 	"time"
 )
 
-func Attach(ctx context.Context, addr string) (*Peer, error) {
+func Attach(ctx context.Context, addr string, mws ...middleware.Middleware) (*Peer, error) {
 	d := net.Dialer{}
 	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
@@ -29,7 +28,12 @@ func Attach(ctx context.Context, addr string) (*Peer, error) {
 	return p, nil
 }
 
-func Listen(addr string, upgradeTimeout time.Duration, dispatch func(rwc io.ReadWriteCloser)) error {
+func Listen(
+	addr string,
+	upgradeTimeout time.Duration,
+	dispatch func(*Peer),
+	mws ...middleware.Middleware,
+) error {
 	listenAddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
 		return err
@@ -51,7 +55,7 @@ func Listen(addr string, upgradeTimeout time.Duration, dispatch func(rwc io.Read
 				ctx, close := context.WithTimeout(context.Background(), upgradeTimeout)
 				defer close()
 
-				p, err := upgradeConn(ctx, conn)
+				p, err := upgradeConn(ctx, conn, mws...)
 				if err != nil {
 					conn.Close()
 					log.Printf("interact with new conn: %v", err)
@@ -65,7 +69,7 @@ func Listen(addr string, upgradeTimeout time.Duration, dispatch func(rwc io.Read
 	return nil
 }
 
-func upgradeConn(ctx context.Context, conn net.Conn) (*Peer, error) {
+func upgradeConn(ctx context.Context, conn net.Conn, mws ...middleware.Middleware) (*Peer, error) {
 	privkey, privsign, pubsign, err := generateKeys()
 	if err != nil {
 		return nil, fmt.Errorf("generate keys: %w", err)
@@ -76,11 +80,18 @@ func upgradeConn(ctx context.Context, conn net.Conn) (*Peer, error) {
 		return nil, fmt.Errorf("handshake error: %w", err)
 	}
 
-	return NewPeer(
-		conn,
+	reqMids := []middleware.Middleware{
 		middleware.Checksum,
 		middleware.Signature(privsign, ppubsign),
 		middleware.Crypto(privkey, ppubkey),
+	}
+
+	reqMids = append(reqMids, mws...)
+
+	return NewPeer(
+		string(ppubkey.Bytes()),
+		conn,
+		reqMids...,
 	), nil
 }
 

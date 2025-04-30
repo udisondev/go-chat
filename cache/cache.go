@@ -61,10 +61,10 @@ func (c *Cache) PutIfAbsent(s string) bool {
 		_, ok := b.cmap[s]
 		if ok {
 			b.mu.Unlock()
-			return false
+			return true
 		}
 		b.mu.Unlock()
 	}
 	c.Put(s)
-	return true
+	return false
 }
