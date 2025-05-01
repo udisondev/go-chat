@@ -12,9 +12,13 @@ import (
 )
 
 func Test_Checksum(t *testing.T) {
+	type adapter struct {
+		io.Reader
+		io.Writer
+	}
 	t.Run("success", func(t *testing.T) {
 		dr, dw := io.Pipe()
-		rw := RWWrapper{
+		rw := adapter{
 			Reader: dr,
 		}
 		checksumer := Checksum(rw)
@@ -41,7 +45,7 @@ func Test_Checksum(t *testing.T) {
 
 	t.Run("invalid", func(t *testing.T) {
 		dr, dw := io.Pipe()
-		rw := RWWrapper{
+		rw := adapter{
 			Reader: dr,
 		}
 

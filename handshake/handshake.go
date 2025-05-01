@@ -16,8 +16,6 @@ func With(
 	pubsign ed25519.PublicKey,
 ) (*ecdh.PublicKey, ed25519.PublicKey, error) {
 	input := make(chan []byte)
-	defer close(input)
-
 	errCh := make(chan error)
 	defer close(errCh)
 
@@ -41,9 +39,13 @@ func With(
 	}()
 
 	go func() {
+		defer close(input)
 		payload := make([]byte, len(pubkey.Bytes())+ed25519.PublicKeySize)
-		for read := 0; read < len(input); {
+		for read := 0; read < len(payload); {
 			n, err := rw.Read(payload[read:])
+			if errors.Is(err, io.EOF) {
+				break
+			}
 			if err != nil {
 				errCh <- err
 				return

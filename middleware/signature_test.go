@@ -12,14 +12,18 @@ import (
 )
 
 func Test_Signature(t *testing.T) {
+	type adapter struct {
+		io.Reader
+		io.Writer
+	}
 	ppubSign, pprivSign, _ := ed25519.GenerateKey(rand.Reader)
 	pubSign, privSign, _ := ed25519.GenerateKey(rand.Reader)
 	t.Run("success read signed pack", func(t *testing.T) {
 		dr, dw := io.Pipe()
-		rw := RWWrapper{
+		a := adapter{
 			Reader: dr,
 		}
-		signer := Signature(privSign, ppubSign, &rw)
+		signer := Signature(privSign, ppubSign)(a)
 
 		text := rand.Text()
 		signature := ed25519.Sign(pprivSign, []byte(text))
@@ -43,7 +47,7 @@ func Test_Signature(t *testing.T) {
 	t.Run("sign", func(t *testing.T) {
 		text := rand.Text()
 		bb := new(bytes.Buffer)
-		signer := Signature(privSign, ppubSign, bb)
+		signer := Signature(privSign, ppubSign)(bb)
 
 		_, err := signer.Write([]byte(text))
 		assert.NoError(t, err)

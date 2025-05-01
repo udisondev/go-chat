@@ -10,11 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type RWWrapper struct {
-	io.Reader
-	io.Writer
-}
-
 func Test_readDownstream(t *testing.T) {
 	t.Run("Success read", func(t *testing.T) {
 		text := rand.Text()

@@ -12,16 +12,20 @@ import (
 )
 
 func Test_Crypto(t *testing.T) {
+	type adapter struct {
+		io.Reader
+		io.Writer
+	}
 	pprivKey, err := ecdh.P256().GenerateKey(rand.Reader)
 	assert.NoError(t, err)
 	privKey, err := ecdh.P256().GenerateKey(rand.Reader)
 	assert.NoError(t, err)
 	t.Run("success decrypt text", func(t *testing.T) {
 		dr, dw := io.Pipe()
-		rw := RWWrapper{
+		rw := adapter{
 			Reader: dr,
 		}
-		enigma := Crypto(privKey, pprivKey.PublicKey(), &rw)
+		enigma := Crypto(privKey, pprivKey.PublicKey())(rw)
 
 		text := rand.Text()
 		encrypted, err := crypto.Encrypt([]byte(text), pprivKey, privKey.PublicKey())
