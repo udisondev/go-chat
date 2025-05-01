@@ -34,6 +34,9 @@ func main() {
 	}
 
 	if listenAddr != nil {
-		network.Listen(*listenAddr, time.Second*2, dsptch.InteractWith, filter)
+		err := network.Listen(*listenAddr, time.Second*2, dsptch.InteractWith, filter)
+		if err != nil {
+			panic(err)
+		}
 	}
 }
