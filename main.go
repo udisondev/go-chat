@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"go-chat/cache"
+	"go-chat/config"
 	"go-chat/dispatcher"
 	"go-chat/middleware"
 	"go-chat/network"
@@ -18,7 +19,7 @@ var (
 func main() {
 	flag.Parse()
 
-	csh := cache.New()
+	csh := cache.New(config.CacheBucketsCount, config.CacheBucketSize)
 	filter := middleware.Filter(csh.Put, csh.PutIfAbsent)
 
 	dsptch := dispatcher.New()
