@@ -16,22 +16,25 @@ type Wrapper struct {
 }
 
 func (w *Wrapper) Write(b []byte) (int, error) {
-	out, err := w.preparer(b)
-	if err != nil {
-		return 0, err
+	if w.preparer != nil {
+		var prepErr error
+		b, prepErr = w.preparer(b)
+		if prepErr != nil {
+			return 0, prepErr
+		}
 	}
-	err = binary.Write(w.downstream, binary.LittleEndian, uint16(len(out)))
+	err := binary.Write(w.downstream, binary.LittleEndian, uint16(len(b)))
 	if err != nil {
 		return 0, fmt.Errorf("write len: %w", err)
 	}
-	for written := 0; written < len(out); {
-		n, err := w.downstream.Write(out[written:])
+	for written := 0; written < len(b); {
+		n, err := w.downstream.Write(b[written:])
 		if err != nil {
 			return written, fmt.Errorf("read payload: %w", err)
 		}
 		written += n
 	}
-	return len(out), nil
+	return len(b), nil
 }
 
 func readDownstream(

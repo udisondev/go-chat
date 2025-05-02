@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"crypto/rand"
 	"errors"
 	"go-chat/config"
 	"io"
@@ -11,7 +10,7 @@ import (
 
 var errIsDuplicate = errors.New("duplicate")
 
-func Filter(put func(string), exists func(string) bool) Middleware {
+func Filter(exists func(string) bool) Middleware {
 	return func(rw io.ReadWriter) io.ReadWriter {
 		r, w := io.Pipe()
 
@@ -39,12 +38,6 @@ func Filter(put func(string), exists func(string) bool) Middleware {
 		return &Wrapper{
 			downstream: rw,
 			Reader:     r,
-			preparer: func(b []byte) ([]byte, error) {
-				nonce := make([]byte, config.NonceLen)
-				rand.Read(nonce)
-				put(unsafe.String(&nonce[0], config.NonceLen))
-				return append(nonce, b...), nil
-			},
 		}
 	}
 }

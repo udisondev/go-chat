@@ -1,10 +1,12 @@
 package dispatcher
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 	"go-chat/config"
 	"go-chat/network"
 	"sync"
+	"unsafe"
 )
 
 type peerWithLock struct {
@@ -13,13 +15,15 @@ type peerWithLock struct {
 }
 
 type Dispatcher struct {
-	mu    sync.RWMutex
-	peers map[string]*peerWithLock
+	mu       sync.RWMutex
+	peers    map[string]*peerWithLock
+	cachePut func(string)
 }
 
-func New() *Dispatcher {
+func New(cachePut func(string)) *Dispatcher {
 	return &Dispatcher{
-		peers: make(map[string]*peerWithLock, config.MazPeersCount),
+		peers:    make(map[string]*peerWithLock, config.MazPeersCount),
+		cachePut: cachePut,
 	}
 }
 
@@ -57,6 +61,43 @@ func (d *Dispatcher) InteractWith(p *network.Peer) {
 
 func (d *Dispatcher) dispatch(b []byte) {
 
+}
+
+func (d *Dispatcher) write(recipient string, b []byte) {
+	payload := make([]byte, 12+len(b))
+	copy(payload[12:], b)
+
+	rand.Read(payload[:12])
+	d.cachePut(unsafe.String(&payload[0], 12))
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	p, ok := d.peers[recipient]
+	if ok {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+
+		_, err := p.Write(payload)
+		if err != nil {
+			p.p.Close()
+			delete(d.peers, recipient)
+		}
+		return
+	}
+
+	for id, p := range d.peers {
+		go func() {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+
+			_, err := p.Write(payload)
+			if err != nil {
+				p.p.Close()
+				delete(d.peers, id)
+			}
+		}()
+	}
 }
 
 func (p *peerWithLock) Write(b []byte) (int, error) {

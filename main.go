@@ -20,9 +20,9 @@ func main() {
 	flag.Parse()
 
 	csh := cache.New(config.CacheBucketsCount, config.CacheBucketSize)
-	filter := middleware.Filter(csh.Put, csh.PutIfAbsent)
+	filter := middleware.Filter(csh.PutIfAbsent)
 
-	dsptch := dispatcher.New()
+	dsptch := dispatcher.New(csh.Put)
 
 	if attachAddr != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
