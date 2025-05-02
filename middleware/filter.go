@@ -24,7 +24,7 @@ func Filter(put func(string), exists func(string) bool) Middleware {
 					if exists(nonce) {
 						return nil, errIsDuplicate
 					}
-					return b, nil
+					return b[config.NonceLen:], nil
 				})
 				if errors.Is(err, errIsDuplicate) {
 					continue
