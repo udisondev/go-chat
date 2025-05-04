@@ -4,10 +4,10 @@ import (
 	"context"
 	"crypto/ecdh"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"fmt"
 	"go-chat/config"
 	"go-chat/handshake"
-	"go-chat/hash"
 	"go-chat/middleware"
 	"go-chat/pkg/pack"
 	"io"
@@ -23,7 +23,7 @@ type Upgrader struct {
 func (u *Upgrader) Upgrade(
 	ctx context.Context,
 	conn io.ReadWriteCloser,
-	dispatch func(hash string, inbox <-chan []byte) <-chan []byte,
+	dispatch func(hash []byte, inbox <-chan []byte) <-chan []byte,
 ) error {
 	h, err := handshake.With(ctx, conn, u.privkey.PublicKey(), u.pubsign)
 	if err != nil {
@@ -51,7 +51,8 @@ func (u *Upgrader) Upgrade(
 	wrapIn = middleware.ReadSignature(h.PubSign)(wrapIn)
 	wrapIn = middleware.Decrypt(u.privkey, h.PubKey)(wrapIn)
 
-	outbox := dispatch(hash.PubKeyToString(h.PubKey), wrapIn)
+	sum := sha256.Sum256(h.PubKey.Bytes())
+	outbox := dispatch(sum[:], wrapIn)
 	outbox = middleware.Encrypt(u.privkey, h.PubKey)(outbox)
 	outbox = middleware.WriteSignature(u.privsign)(outbox)
 	outbox = middleware.WriteChecksum(outbox)

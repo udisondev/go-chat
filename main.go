@@ -35,19 +35,18 @@ func main() {
 		dispatcher.RaiseYourHand: initiator.HandleRaiseYourHand,
 	}
 
-	dsptch := dispatcher.New(handlers)
+	basicDispatch := dispatcher.NewBasic(handlers)
 
 	n := network.NewNode(
 		privkey,
 		privsign,
 		pubsign,
-		dsptch,
 	)
 
 	if attachAddr != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 		defer cancel()
-		err := n.Attach(ctx, *attachAddr)
+		err := n.Attach(ctx, *attachAddr, basicDispatch)
 		if err != nil {
 			panic(err)
 		}
@@ -59,6 +58,6 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		dsptch.AddHandler(dispatcher.Newbie, introducer.HandleNewbie)
+		basicDispatch.AddHandler(dispatcher.Newbie, introducer.HandleNewbie)
 	}
 }
