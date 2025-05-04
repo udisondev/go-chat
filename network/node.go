@@ -35,18 +35,14 @@ func NewNode(
 	}
 }
 
-type Dispatcher interface {
-	Dispatch(hash []byte, inbox <-chan []byte) <-chan []byte
-}
-
-func (n *Node) Attach(ctx context.Context, addr string, dispatcher Dispatcher) error {
+func (n *Node) Attach(ctx context.Context, addr string, dispatcher func(hash []byte, inbox <-chan []byte) <-chan []byte) error {
 	d := net.Dialer{}
 	c, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return err
 	}
 
-	err = n.upgrade(ctx, c, dispatcher.Dispatch)
+	err = n.upgrade(ctx, c, dispatcher)
 	if err != nil {
 		c.Close()
 		return err
@@ -55,7 +51,7 @@ func (n *Node) Attach(ctx context.Context, addr string, dispatcher Dispatcher) e
 	return nil
 }
 
-func (n *Node) Listen(addr string, upgradeTimeout time.Duration, d Dispatcher) error {
+func (n *Node) Listen(addr string, upgradeTimeout time.Duration, dispatcher func(hash []byte, inbox <-chan []byte) <-chan []byte) error {
 	listenAddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
 		return err
@@ -77,7 +73,7 @@ func (n *Node) Listen(addr string, upgradeTimeout time.Duration, d Dispatcher) e
 				ctx, close := context.WithTimeout(context.Background(), upgradeTimeout)
 				defer close()
 
-				err := n.upgrade(ctx, c, d.Dispatch)
+				err := n.upgrade(ctx, c, dispatcher)
 				if err != nil {
 					c.Close()
 					log.Printf("interact with new conn: %v", err)

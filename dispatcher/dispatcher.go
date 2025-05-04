@@ -15,11 +15,12 @@ type peer struct {
 }
 
 type Dispatcher struct {
-	mu       sync.RWMutex
-	hash     []byte
-	peers    map[string]*peer
-	cache    *cache.Cache
-	handlers map[SignalType]SignalHandler
+	mu         sync.RWMutex
+	hash       []byte
+	peers      map[string]*peer
+	cache      *cache.Cache
+	handlers   map[SignalType]SignalHandler
+	entrypoint bool
 }
 
 type SignalHandler func(Signal) (Signal, error)
@@ -32,12 +33,17 @@ func New(handlers map[SignalType]SignalHandler) *Dispatcher {
 	}
 }
 
+func (d *Dispatcher) SetEntrypoint(b bool) {
+	d.entrypoint = b
+}
+
 func (d *Dispatcher) AddHandler(t SignalType, h SignalHandler) {
 	d.handlers[t] = h
 }
 
-func (d *Dispatcher) Dispatch(hash string, input <-chan []byte) <-chan []byte {
-	output := make(chan []byte)
+func (d *Dispatcher) Dispatch(peerHash []byte, input <-chan []byte) <-chan []byte {
+	output := make(chan []byte, 256)
+	output <- NewSignal(RaiseYourHand, d.hash, peerHash, nil)
 	mu := new(sync.Mutex)
 	disconnected := atomic.Bool{}
 	disconnect := sync.OnceFunc(func() {
@@ -49,7 +55,7 @@ func (d *Dispatcher) Dispatch(hash string, input <-chan []byte) <-chan []byte {
 	})
 
 	d.mu.Lock()
-	d.peers[hash] = &peer{
+	d.peers[string(peerHash)] = &peer{
 		disconnect: disconnect,
 		send: func(b []byte) error {
 			mu.Lock()
@@ -86,7 +92,7 @@ func (d *Dispatcher) Dispatch(hash string, input <-chan []byte) <-chan []byte {
 			if err != nil {
 				return
 			}
-			if out.Payload == nil {
+			if out == nil {
 				continue
 			}
 			d.send(out)

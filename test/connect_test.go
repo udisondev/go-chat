@@ -2,6 +2,9 @@ package test
 
 import (
 	"context"
+	"crypto/ecdh"
+	"crypto/ed25519"
+	"crypto/rand"
 	"go-chat/network"
 	"sync"
 	"testing"
@@ -15,7 +18,9 @@ func Test_Connect(t *testing.T) {
 	hello := "Hello server"
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	network.Listen(addr, time.Second*5, func(_ string, inbox <-chan []byte) <-chan []byte {
+	entrypoint, err := genNode()
+	assert.NoError(t, err)
+	entrypoint.Listen(addr, time.Second*5, func(_ []byte, inbox <-chan []byte) <-chan []byte {
 		outbox := make(chan []byte)
 		go func() {
 			defer wg.Done()
@@ -31,7 +36,9 @@ func Test_Connect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second*5)
 	defer cancel()
 
-	err := network.Attach(ctx, addr, func(_ string, inbox <-chan []byte) <-chan []byte {
+	attached, err := genNode()
+	assert.NoError(t, err)
+	err = attached.Attach(ctx, addr, func(_ []byte, inbox <-chan []byte) <-chan []byte {
 		outbox := make(chan []byte, 1)
 		outbox <- []byte(hello)
 
@@ -48,4 +55,17 @@ func Test_Connect(t *testing.T) {
 
 	assert.NoError(t, err)
 	wg.Wait()
+}
+
+func genNode() (*network.Node, error) {
+	privkey, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil
+	}
+	pubsign, privsign, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil
+	}
+	n := network.NewNode(privkey, privsign, pubsign)
+	return n, nil
 }

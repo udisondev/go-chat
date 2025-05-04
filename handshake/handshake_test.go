@@ -62,10 +62,10 @@ func Test_With(t *testing.T) {
 			assert.Equal(t, expected, in)
 		}()
 
-		actualPeerPubKey, actualPeerPubSign, err := With(t.Context(), a, privKey.PublicKey(), pubSign)
+		h, err := With(t.Context(), a, privKey.PublicKey(), pubSign)
 		assert.NoError(t, err)
-		assert.Equal(t, peerPrivKey.PublicKey(), actualPeerPubKey)
-		assert.Equal(t, peerPubSign, actualPeerPubSign)
+		assert.Equal(t, peerPrivKey.PublicKey(), h.PubKey)
+		assert.Equal(t, peerPubSign, h.PubSign)
 		wg.Wait()
 	})
 
@@ -89,7 +89,7 @@ func Test_With(t *testing.T) {
 			Writer: new(bytes.Buffer),
 			Reader: buf,
 		}
-		_, _, err = With(t.Context(), a, privKey.PublicKey(), pubSign)
+		_, err = With(t.Context(), a, privKey.PublicKey(), pubSign)
 		assert.ErrorContains(t, err, "parse public key")
 	})
 
@@ -102,7 +102,7 @@ func Test_With(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		_, _, err = With(ctx, new(bytes.Buffer), privKey.PublicKey(), pubSign)
+		_, err = With(ctx, new(bytes.Buffer), privKey.PublicKey(), pubSign)
 		assert.ErrorContains(t, err, "context closed")
 	})
 }
