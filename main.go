@@ -6,7 +6,6 @@ import (
 	"go-chat/cache"
 	"go-chat/config"
 	"go-chat/dispatcher"
-	"go-chat/middleware"
 	"go-chat/network"
 	"time"
 )
@@ -20,22 +19,19 @@ func main() {
 	flag.Parse()
 
 	csh := cache.New(config.CacheBucketsCount, config.CacheBucketSize)
-	filter := middleware.Filter(csh.PutIfAbsent)
-
 	dsptch := dispatcher.New(csh.Put)
 
 	if attachAddr != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 		defer cancel()
-		p, err := network.Attach(ctx, *attachAddr, filter)
+		err := network.Attach(ctx, *attachAddr, dsptch.Dispatch)
 		if err != nil {
 			panic(err)
 		}
-		dsptch.InteractWith(p)
 	}
 
 	if listenAddr != nil {
-		err := network.Listen(*listenAddr, time.Second*2, dsptch.InteractWith, filter)
+		err := network.Listen(*listenAddr, time.Second*2, dsptch.Dispatch)
 		if err != nil {
 			panic(err)
 		}

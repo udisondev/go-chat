@@ -1,43 +1,25 @@
 package middleware
 
 import (
-	"errors"
 	"go-chat/config"
-	"io"
-	"log"
 	"unsafe"
 )
 
-var errIsDuplicate = errors.New("duplicate")
-
-func Filter(exists func(string) bool) Middleware {
-	return func(rw io.ReadWriter) io.ReadWriter {
-		r, w := io.Pipe()
+func Filter(isNew func(string) bool) func(<-chan []byte) <-chan []byte {
+	return func(input <-chan []byte) <-chan []byte {
+		output := make(chan []byte)
 
 		go func() {
-			defer r.Close()
-			buf := make([]byte, config.MaxInputLen)
-			for {
-				err := readDownstream(buf, config.NonceLen, rw, w, func(b []byte) ([]byte, error) {
-					nonce := unsafe.String(&b[0], config.NonceLen)
-					if exists(nonce) {
-						return nil, errIsDuplicate
-					}
-					return b[config.NonceLen:], nil
-				})
-				if errors.Is(err, errIsDuplicate) {
+			defer close(output)
+
+			for in := range input {
+				if !isNew(unsafe.String(&in[0], config.NonceLen)) {
 					continue
 				}
-				if err != nil {
-					log.Printf("Filter: %v", err)
-					return
-				}
+				output <- in
 			}
 		}()
 
-		return &Wrapper{
-			downstream: rw,
-			Reader:     r,
-		}
+		return output
 	}
 }
