@@ -4,7 +4,14 @@ import (
 	"context"
 	"crypto/ecdh"
 	"crypto/ed25519"
+	"crypto/sha256"
+	"fmt"
+	"go-chat/config"
+	"go-chat/handshake"
+	"go-chat/middleware"
 	"go-chat/pkg/closer"
+	"go-chat/pkg/pack"
+	"io"
 	"log"
 	"net"
 	"time"
@@ -39,13 +46,7 @@ func (n *Node) Attach(ctx context.Context, addr string, dispatcher Dispatcher) e
 		return err
 	}
 
-	u := Upgrader{
-		privkey:  n.privkey,
-		privsign: n.privsign,
-		pubsign:  n.pubsign,
-	}
-
-	err = u.Upgrade(ctx, c, dispatcher.Dispatch)
+	err = n.upgrade(ctx, c, dispatcher.Dispatch)
 	if err != nil {
 		c.Close()
 		return err
@@ -65,12 +66,6 @@ func (n *Node) Listen(addr string, upgradeTimeout time.Duration, d Dispatcher) e
 	}
 	closer.Add(listener.Close)
 
-	u := Upgrader{
-		privkey:  n.privkey,
-		privsign: n.privsign,
-		pubsign:  n.pubsign,
-	}
-
 	go func() {
 		for {
 			c, err := listener.Accept()
@@ -82,13 +77,67 @@ func (n *Node) Listen(addr string, upgradeTimeout time.Duration, d Dispatcher) e
 				ctx, close := context.WithTimeout(context.Background(), upgradeTimeout)
 				defer close()
 
-				err := u.Upgrade(ctx, c, d.Dispatch)
+				err := n.upgrade(ctx, c, d.Dispatch)
 				if err != nil {
 					c.Close()
 					log.Printf("interact with new conn: %v", err)
 					return
 				}
 			}()
+		}
+	}()
+
+	return nil
+}
+
+func (n *Node) upgrade(
+	ctx context.Context,
+	conn io.ReadWriteCloser,
+	dispatch func(hash []byte, inbox <-chan []byte) <-chan []byte,
+) error {
+	h, err := handshake.With(ctx, conn, n.privkey.PublicKey(), n.pubsign)
+	if err != nil {
+		return fmt.Errorf("hanshake: %w", err)
+	}
+
+	inbox := make(chan []byte)
+	go func() {
+		defer close(inbox)
+
+		buf := make([]byte, config.MaxInputLen)
+		for {
+			n, err := pack.ReadFrom(conn, buf)
+			if err != nil {
+				log.Printf("Error read pack: %v", err)
+				return
+			}
+			tmp := make([]byte, n)
+			copy(tmp, buf[:n])
+			inbox <- tmp
+		}
+	}()
+
+	wrapIn := middleware.ReadChecksum(inbox)
+	wrapIn = middleware.ReadSignature(h.PubSign)(wrapIn)
+	wrapIn = middleware.Decrypt(n.privkey, h.PubKey)(wrapIn)
+
+	sum := sha256.Sum256(h.PubKey.Bytes())
+	outbox := dispatch(sum[:], wrapIn)
+	outbox = middleware.Encrypt(n.privkey, h.PubKey)(outbox)
+	outbox = middleware.WriteSignature(n.privsign)(outbox)
+	outbox = middleware.WriteChecksum(outbox)
+
+	go func() {
+		defer conn.Close()
+
+		for out := range outbox {
+			n, err := pack.WriteTo(conn, out)
+			if err != nil {
+				return
+			}
+			if n < len(out) {
+				return
+			}
 		}
 	}()
 
