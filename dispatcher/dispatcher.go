@@ -1,7 +1,8 @@
 package dispatcher
 
 import (
-	"fmt"
+	"errors"
+	"go-chat/cache"
 	"go-chat/config"
 	"sync"
 	"sync/atomic"
@@ -10,20 +11,29 @@ import (
 type peer struct {
 	mu         sync.Mutex
 	disconnect func()
-	send       func([]byte)
+	send       func([]byte) error
 }
 
 type Dispatcher struct {
 	mu       sync.RWMutex
+	hash     []byte
 	peers    map[string]*peer
-	cachePut func(string)
+	cache    *cache.Cache
+	handlers map[SignalType]SignalHandler
 }
 
-func New(cachePut func(string)) *Dispatcher {
+type SignalHandler func(Signal) (Signal, error)
+
+func New(handlers map[SignalType]SignalHandler) *Dispatcher {
 	return &Dispatcher{
 		peers:    make(map[string]*peer, config.MazPeersCount),
-		cachePut: cachePut,
+		cache:    cache.New(config.CacheBucketsCount, config.CacheBucketSize),
+		handlers: handlers,
 	}
+}
+
+func (d *Dispatcher) AddHandler(t SignalType, h SignalHandler) {
+	d.handlers[t] = h
 }
 
 func (d *Dispatcher) Dispatch(hash string, input <-chan []byte) <-chan []byte {
@@ -41,17 +51,20 @@ func (d *Dispatcher) Dispatch(hash string, input <-chan []byte) <-chan []byte {
 	d.mu.Lock()
 	d.peers[hash] = &peer{
 		disconnect: disconnect,
-		send: func(b []byte) {
+		send: func(b []byte) error {
 			mu.Lock()
 			defer mu.Unlock()
 
 			if disconnected.Load() {
-				return
+				return nil
 			}
+
 			select {
 			case output <- b:
+				return nil
 			default:
 				disconnect()
+				return errors.New("don't read!")
 			}
 		},
 	}
@@ -60,9 +73,48 @@ func (d *Dispatcher) Dispatch(hash string, input <-chan []byte) <-chan []byte {
 		defer close(output)
 
 		for in := range input {
-			fmt.Println(string(in))
+			s := Signal(in)
+			if !d.cache.PutIfAbsent(s.Nonce()) {
+				continue
+			}
+
+			h, ok := d.handlers[s.Type()]
+			if !ok {
+				continue
+			}
+			out, err := h(s)
+			if err != nil {
+				return
+			}
+			if out.Payload == nil {
+				continue
+			}
+			d.send(out)
 		}
 	}()
 
 	return output
+}
+
+func (d *Dispatcher) send(s Signal) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.cache.Put(s.Nonce())
+	p, ok := d.peers[s.RecipientString()]
+	if ok {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+
+		p.send([]byte(s))
+		return
+	}
+
+	for h, p := range d.peers {
+		err := p.send([]byte(s))
+		if err == nil {
+			continue
+		}
+		delete(d.peers, h)
+	}
 }

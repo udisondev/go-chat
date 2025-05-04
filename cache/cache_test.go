@@ -37,9 +37,9 @@ func Test_Cache(t *testing.T) {
 		cache := New(1, 10)
 		cache.Put(val)
 		assert.Len(t, cache.buckets[0], 1)
-		assert.True(t, cache.PutIfAbsent(val))
+		assert.False(t, cache.PutIfAbsent(val))
 		assert.Len(t, cache.buckets[0], 1)
-		assert.False(t, cache.PutIfAbsent(rand.Text()))
+		assert.True(t, cache.PutIfAbsent(rand.Text()))
 		assert.Len(t, cache.buckets[0], 2)
 	})
 }

@@ -9,12 +9,17 @@ import (
 	"io"
 )
 
+type Handshake struct {
+	PubKey  *ecdh.PublicKey
+	PubSign ed25519.PublicKey
+}
+
 func With(
 	ctx context.Context,
 	rw io.ReadWriter,
 	pubkey *ecdh.PublicKey,
 	pubsign ed25519.PublicKey,
-) (*ecdh.PublicKey, ed25519.PublicKey, error) {
+) (Handshake, error) {
 	input := make(chan []byte)
 	errCh := make(chan error)
 	defer close(errCh)
@@ -57,16 +62,19 @@ func With(
 
 	select {
 	case <-ctx.Done():
-		return nil, nil, errors.New("context closed")
+		return Handshake{}, errors.New("context closed")
 	case e := <-errCh:
-		return nil, nil, e
+		return Handshake{}, e
 	case b := <-input:
 		sigBytes, keyBytes := b[:ed25519.PublicKeySize], b[ed25519.PublicKeySize:]
 		peerPubKey, err := ecdh.P256().NewPublicKey(keyBytes)
 		if err != nil {
-			return nil, nil, fmt.Errorf("parse public key: %w", err)
+			return Handshake{}, fmt.Errorf("parse public key: %w", err)
 		}
 		peerPubSign := ed25519.PublicKey(sigBytes)
-		return peerPubKey, peerPubSign, nil
+		return Handshake{
+			PubKey:  peerPubKey,
+			PubSign: peerPubSign,
+		}, nil
 	}
 }

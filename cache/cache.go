@@ -37,12 +37,12 @@ func (c *Cache) PutIfAbsent(s string) bool {
 	for i := c.pos; i >= 0; i-- {
 		_, ok := c.buckets[i][s]
 		if ok {
-			return true
+			return false
 		}
 	}
 
 	c.put(s)
-	return false
+	return true
 }
 
 func (c *Cache) put(s string) {

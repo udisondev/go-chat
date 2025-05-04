@@ -6,7 +6,11 @@ import (
 	"encoding/hex"
 )
 
-func Peer(key *ecdh.PublicKey) string {
+func PubKeyToString(key *ecdh.PublicKey) string {
+	return string(hex.EncodeToString(PubKey(key)))
+}
+
+func PubKey(key *ecdh.PublicKey) []byte {
 	sum := sha256.Sum256(key.Bytes())
-	return string(hex.EncodeToString(sum[:]))
+	return sum[:]
 }

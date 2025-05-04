@@ -1,4 +1,4 @@
-package conn
+package network
 
 import (
 	"context"
@@ -9,26 +9,23 @@ import (
 	"go-chat/handshake"
 	"go-chat/hash"
 	"go-chat/middleware"
-	pack "go-chat/pkg/packlen"
+	"go-chat/pkg/pack"
 	"io"
 	"log"
 )
 
 type Upgrader struct {
-	privKey  *ecdh.PrivateKey
-	privSign ed25519.PrivateKey
-	pubSign  ed25519.PublicKey
-	dspch    Dispatcher
+	privkey  *ecdh.PrivateKey
+	privsign ed25519.PrivateKey
+	pubsign  ed25519.PublicKey
 }
-
-type Middleware func(<-chan []byte) <-chan []byte
-type Dispatcher func(string, <-chan []byte) <-chan []byte
 
 func (u *Upgrader) Upgrade(
 	ctx context.Context,
 	conn io.ReadWriteCloser,
+	dispatch func(hash string, inbox <-chan []byte) <-chan []byte,
 ) error {
-	hdshk, err := handshake.With(ctx, conn, u.privKey.PublicKey(), u.pubSign)
+	h, err := handshake.With(ctx, conn, u.privkey.PublicKey(), u.pubsign)
 	if err != nil {
 		return fmt.Errorf("hanshake: %w", err)
 	}
@@ -51,20 +48,13 @@ func (u *Upgrader) Upgrade(
 	}()
 
 	wrapIn := middleware.ReadChecksum(inbox)
-	wrapIn = middleware.ReadSignature(hdshk.PubSign)(wrapIn)
-	wrapIn = middleware.Decrypt(u.privKey, hdshk.PubKey)(wrapIn)
+	wrapIn = middleware.ReadSignature(h.PubSign)(wrapIn)
+	wrapIn = middleware.Decrypt(u.privkey, h.PubKey)(wrapIn)
 
-	outbox := u.dspch(hash.PubKeyToString(hdshk.PubKey), wrapIn)
-
-	outMws := []Middleware{
-		middleware.Encrypt(u.privKey, hdshk.PubKey),
-		middleware.WriteSignature(u.privSign),
-		middleware.WriteChecksum,
-	}
-
-	for _, mw := range outMws {
-		outbox = mw(outbox)
-	}
+	outbox := dispatch(hash.PubKeyToString(h.PubKey), wrapIn)
+	outbox = middleware.Encrypt(u.privkey, h.PubKey)(outbox)
+	outbox = middleware.WriteSignature(u.privsign)(outbox)
+	outbox = middleware.WriteChecksum(outbox)
 
 	go func() {
 		defer conn.Close()

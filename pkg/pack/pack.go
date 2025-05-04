@@ -1,4 +1,4 @@
-package packlen
+package pack
 
 import (
 	"encoding/binary"
