@@ -6,6 +6,7 @@ import (
 	"go-chat/config"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type peer struct {
@@ -27,12 +28,13 @@ type Client struct {
 }
 
 type Server struct {
-	hash     []byte
-	mu       sync.Mutex
-	peers    map[string]*peer
-	newbies  map[string]*peer
-	handlers map[SignalType]func(Signal) (Signal, error)
-	cache    *cache.Cache
+	hash      []byte
+	peersMu   sync.Mutex
+	peers     map[string]*peer
+	newbiesMu sync.Mutex
+	newbies   map[string]*peer
+	handlers  map[SignalType]func(Signal) (Signal, error)
+	cache     *cache.Cache
 }
 
 func NewClient(hash []byte) *Client {
@@ -69,18 +71,24 @@ func (d *Client) Dispatch(_ []byte, input <-chan []byte) <-chan []byte {
 }
 
 func (d *Server) Dispatch(hash []byte, input <-chan []byte) <-chan []byte {
+	strhash := string(hash)
+	d.newbiesMu.Lock()
+	d.newbiesMu.Unlock()
 	output := make(chan []byte, 256)
 	ctx, closeCtx := context.WithCancel(context.Background())
 	disconnected := atomic.Bool{}
 	mu := sync.Mutex{}
 	disconnect := sync.OnceFunc(func() {
 		closeCtx()
-		d.mu.Lock()
-		defer d.mu.Unlock()
+
+		d.peersMu.Lock()
+		defer d.peersMu.Unlock()
+
 		mu.Lock()
 		defer mu.Unlock()
-		delete(d.peers, string(hash))
 		disconnected.Swap(false)
+
+		delete(d.peers, strhash)
 		close(output)
 	})
 
@@ -100,7 +108,19 @@ func (d *Server) Dispatch(hash []byte, input <-chan []byte) <-chan []byte {
 		},
 	}
 
-	d.peers[string(hash)] = &p
+	d.newbies[strhash] = &p
+	go func() {
+		<-time.After(time.Second * 10)
+		d.newbiesMu.Lock()
+		defer d.newbiesMu.Unlock()
+
+		p, ok := d.newbies[strhash]
+		if !ok {
+			return
+		}
+		p.disconnect()
+		delete(d.newbies, strhash)
+	}()
 
 	go func() {
 		for {
