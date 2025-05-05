@@ -40,7 +40,9 @@ func NewSignal(t SignalType, author, recipient []byte, payload []byte) Signal {
 	out[pos] = byte(t)
 	pos++
 	pos += copy(out[pos:], recipient)
-	copy(out[pos:], payload)
+	if payload != nil {
+		copy(out[pos:], payload)
+	}
 	return Signal(out)
 }
 

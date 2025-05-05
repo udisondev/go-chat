@@ -1,7 +1,7 @@
 package dispatcher
 
 import (
-	"errors"
+	"context"
 	"go-chat/cache"
 	"go-chat/config"
 	"sync"
@@ -9,118 +9,115 @@ import (
 )
 
 type peer struct {
-	mu         sync.Mutex
 	disconnect func()
-	send       func([]byte) error
+	send       func([]byte)
 }
 
-type Dispatcher struct {
-	mu         sync.RWMutex
-	hash       []byte
-	peers      map[string]*peer
-	cache      *cache.Cache
-	handlers   map[SignalType]SignalHandler
-	entrypoint bool
+type peerState uint8
+
+const (
+	NewBie peerState = iota
+	Trusted
+)
+
+type Client struct {
+	hash     []byte
+	cache    *cache.Cache
+	handlers map[SignalType]func(Signal) (Signal, error)
 }
 
-type SignalHandler func(Signal) (Signal, error)
+type Server struct {
+	hash     []byte
+	mu       sync.Mutex
+	peers    map[string]*peer
+	newbies  map[string]*peer
+	handlers map[SignalType]func(Signal) (Signal, error)
+	cache    *cache.Cache
+}
 
-func New(handlers map[SignalType]SignalHandler) *Dispatcher {
-	return &Dispatcher{
-		peers:    make(map[string]*peer, config.MazPeersCount),
+func NewClient(hash []byte) *Client {
+	return &Client{
+		hash:     hash,
 		cache:    cache.New(config.CacheBucketsCount, config.CacheBucketSize),
-		handlers: handlers,
+		handlers: make(map[SignalType]func(Signal) (Signal, error)),
 	}
 }
 
-func (d *Dispatcher) SetEntrypoint(b bool) {
-	d.entrypoint = b
+func NewServer(hash []byte) *Server {
+	return &Server{
+		hash:     hash,
+		cache:    cache.New(config.CacheBucketsCount, config.CacheBucketSize),
+		peers:    make(map[string]*peer),
+		newbies:  make(map[string]*peer),
+		handlers: make(map[SignalType]func(Signal) (Signal, error)),
+	}
 }
 
-func (d *Dispatcher) AddHandler(t SignalType, h SignalHandler) {
-	d.handlers[t] = h
-}
-
-func (d *Dispatcher) Dispatch(peerHash []byte, input <-chan []byte) <-chan []byte {
+func (d *Client) Dispatch(_ []byte, input <-chan []byte) <-chan []byte {
 	output := make(chan []byte, 256)
-	output <- NewSignal(RaiseYourHand, d.hash, peerHash, nil)
-	mu := new(sync.Mutex)
-	disconnected := atomic.Bool{}
-	disconnect := sync.OnceFunc(func() {
-		mu.Lock()
-		defer mu.Unlock()
-
-		disconnected.Swap(true)
-		close(output)
-	})
-
-	d.mu.Lock()
-	d.peers[string(peerHash)] = &peer{
-		disconnect: disconnect,
-		send: func(b []byte) error {
-			mu.Lock()
-			defer mu.Unlock()
-
-			if disconnected.Load() {
-				return nil
-			}
-
-			select {
-			case output <- b:
-				return nil
-			default:
-				disconnect()
-				return errors.New("don't read!")
-			}
-		},
-	}
-
 	go func() {
 		defer close(output)
-
 		for in := range input {
 			s := Signal(in)
 			if !d.cache.PutIfAbsent(s.Nonce()) {
 				continue
 			}
-
-			h, ok := d.handlers[s.Type()]
-			if !ok {
-				continue
-			}
-			out, err := h(s)
-			if err != nil {
-				return
-			}
-			if out == nil {
-				continue
-			}
-			d.send(out)
 		}
 	}()
 
 	return output
 }
 
-func (d *Dispatcher) send(s Signal) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+func (d *Server) Dispatch(hash []byte, input <-chan []byte) <-chan []byte {
+	output := make(chan []byte, 256)
+	ctx, closeCtx := context.WithCancel(context.Background())
+	disconnected := atomic.Bool{}
+	mu := sync.Mutex{}
+	disconnect := sync.OnceFunc(func() {
+		closeCtx()
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		mu.Lock()
+		defer mu.Unlock()
+		delete(d.peers, string(hash))
+		disconnected.Swap(false)
+		close(output)
+	})
 
-	d.cache.Put(s.Nonce())
-	p, ok := d.peers[s.RecipientString()]
-	if ok {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-
-		p.send([]byte(s))
-		return
+	p := peer{
+		disconnect: disconnect,
+		send: func(b []byte) {
+			mu.Lock()
+			defer mu.Unlock()
+			if disconnected.Load() {
+				return
+			}
+			select {
+			case output <- b:
+			default:
+				go disconnect()
+			}
+		},
 	}
 
-	for h, p := range d.peers {
-		err := p.send([]byte(s))
-		if err == nil {
-			continue
+	d.peers[string(hash)] = &p
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case in, ok := <-input:
+				if !ok {
+					return
+				}
+				s := Signal(in)
+				if !d.cache.PutIfAbsent(s.Nonce()) {
+					continue
+				}
+			}
 		}
-		delete(d.peers, h)
-	}
+	}()
+
+	return output
 }

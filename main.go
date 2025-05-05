@@ -6,8 +6,6 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"flag"
-	"go-chat/dispatcher"
-	"go-chat/handler"
 	"go-chat/network"
 	"time"
 )
@@ -29,14 +27,6 @@ func main() {
 		panic(err)
 	}
 
-	initiator := handler.Initiator{}
-
-	handlers := map[dispatcher.SignalType]dispatcher.SignalHandler{
-		dispatcher.RaiseYourHand: initiator.HandleRaiseYourHand,
-	}
-
-	dspch := dispatcher.New(handlers)
-
 	n := network.NewNode(
 		privkey,
 		privsign,
@@ -46,19 +36,16 @@ func main() {
 	if attachAddr != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 		defer cancel()
-		err := n.Attach(ctx, *attachAddr, dspch.Dispatch)
+		err := n.Attach(ctx, *attachAddr)
 		if err != nil {
 			panic(err)
 		}
 	}
 
 	if listenAddr != nil {
-		dspch.SetEntrypoint(true)
-		introducer := handler.Introducer{}
-		err := n.Listen(*listenAddr, time.Second*2, dspch.Dispatch)
+		err := n.Listen(*listenAddr, time.Second*2)
 		if err != nil {
 			panic(err)
 		}
-		dspch.AddHandler(dispatcher.Newbie, introducer.HandleNewbie)
 	}
 }

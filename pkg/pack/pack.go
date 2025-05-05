@@ -8,11 +8,13 @@ import (
 )
 
 func ReadFrom(r io.Reader, buf []byte) (int, error) {
-	var l int
-	err := binary.Read(r, binary.LittleEndian, &l)
+	var packl uint16
+	err := binary.Read(r, binary.LittleEndian, &packl)
 	if err != nil {
 		return 0, fmt.Errorf("read pack len: %w", err)
 	}
+
+	l := int(packl)
 
 	if l > len(buf) {
 		return 0, errors.New("pack too big")
@@ -30,7 +32,7 @@ func ReadFrom(r io.Reader, buf []byte) (int, error) {
 }
 
 func WriteTo(w io.Writer, b []byte) (int, error) {
-	err := binary.Write(w, binary.LittleEndian, len(b))
+	err := binary.Write(w, binary.LittleEndian, uint16(len(b)))
 	if err != nil {
 		return 0, fmt.Errorf("write pack len: %w", err)
 	}

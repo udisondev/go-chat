@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"go-chat/config"
+	"go-chat/dispatcher"
 	"go-chat/handshake"
 	"go-chat/middleware"
 	"go-chat/pkg/closer"
@@ -35,14 +36,17 @@ func NewNode(
 	}
 }
 
-func (n *Node) Attach(ctx context.Context, addr string, dispatcher func(hash []byte, inbox <-chan []byte) <-chan []byte) error {
+func (n *Node) Attach(ctx context.Context, addr string) error {
 	d := net.Dialer{}
 	c, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return err
 	}
 
-	err = n.upgrade(ctx, c, dispatcher)
+	hash := sha256.Sum256(n.privkey.PublicKey().Bytes())
+	dspch := dispatcher.NewClient(hash[:])
+
+	err = n.upgrade(ctx, c, dspch.Dispatch)
 	if err != nil {
 		c.Close()
 		return err
@@ -51,7 +55,7 @@ func (n *Node) Attach(ctx context.Context, addr string, dispatcher func(hash []b
 	return nil
 }
 
-func (n *Node) Listen(addr string, upgradeTimeout time.Duration, dispatcher func(hash []byte, inbox <-chan []byte) <-chan []byte) error {
+func (n *Node) Listen(addr string, upgradeTimeout time.Duration) error {
 	listenAddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
 		return err
@@ -61,6 +65,9 @@ func (n *Node) Listen(addr string, upgradeTimeout time.Duration, dispatcher func
 		return err
 	}
 	closer.Add(listener.Close)
+
+	hash := sha256.Sum256(n.privkey.PublicKey().Bytes())
+	d := dispatcher.NewServer(hash[:])
 
 	go func() {
 		for {
@@ -73,7 +80,7 @@ func (n *Node) Listen(addr string, upgradeTimeout time.Duration, dispatcher func
 				ctx, close := context.WithTimeout(context.Background(), upgradeTimeout)
 				defer close()
 
-				err := n.upgrade(ctx, c, dispatcher)
+				err := n.upgrade(ctx, c, d.Dispatch)
 				if err != nil {
 					c.Close()
 					log.Printf("interact with new conn: %v", err)
