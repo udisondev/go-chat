@@ -30,10 +30,11 @@ const (
 	RecipientLen   = 32
 	RecipientStart = TypeStart + TypeLen
 	PayloadStart   = RecipientStart + RecipientLen
+	MinLen         = NonceLen + AuthorLen + RecipientLen
 )
 
 func NewSignal(t SignalType, author, recipient []byte, payload []byte) Signal {
-	out := make([]byte, NonceLen+AuthorLen+RecipientLen+len(payload)+1)
+	out := make([]byte, MinLen+len(payload)+1)
 	rand.Read(out[:config.NonceLen])
 	pos := config.NonceLen
 	pos += copy(out[pos:], author)
@@ -56,6 +57,10 @@ func (s Signal) Nonce() string {
 
 func (s Signal) Author() []byte {
 	return s[AuthorStart:TypeStart]
+}
+
+func (s Signal) AuthorString() string {
+	return unsafe.String(&s[AuthorStart], AuthorLen)
 }
 
 func (s Signal) Recipient() []byte {
