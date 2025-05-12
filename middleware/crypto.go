@@ -2,47 +2,52 @@ package middleware
 
 import (
 	"crypto/ecdh"
-	"go-chat/pkg/crypto"
-	"log"
+	"go-chat/config"
+	"go-chat/netcrypt"
+	"io"
 )
 
-func Decrypt(privkey *ecdh.PrivateKey, pubkey *ecdh.PublicKey) func(<-chan []byte) <-chan []byte {
-	return func(input <-chan []byte) <-chan []byte {
-		output := make(chan []byte)
+type Crypter struct {
+	downstream io.ReadWriteCloser
+	privkey    *ecdh.PrivateKey
+	pubkey     *ecdh.PublicKey
+	buf        []byte
+}
 
-		go func() {
-			defer close(output)
-
-			for in := range input {
-				decrypted, err := crypto.Decrypt(in, privkey, pubkey)
-				if err != nil {
-					log.Println("Error decrypt message: %w", err)
-				}
-				output <- decrypted
-			}
-		}()
-
-		return output
+func Crypt(privkey *ecdh.PrivateKey, pubkey *ecdh.PublicKey, rwc io.ReadWriteCloser) io.ReadWriteCloser {
+	return &Crypter{
+		downstream: rwc,
+		privkey:    privkey,
+		pubkey:     pubkey,
+		buf:        make([]byte, config.MaxInputLen),
 	}
 }
 
-func Encrypt(privkey *ecdh.PrivateKey, pubkey *ecdh.PublicKey) func(<-chan []byte) <-chan []byte {
-	return func(input <-chan []byte) <-chan []byte {
-		output := make(chan []byte)
-
-		go func() {
-			defer close(output)
-
-			for in := range input {
-				encrypted, err := crypto.Encrypt(in, privkey, pubkey)
-				if err != nil {
-					log.Println("Error encrypt message")
-					return
-				}
-				output <- encrypted
-			}
-		}()
-
-		return output
+func (c *Crypter) Read(b []byte) (int, error) {
+	n, err := c.downstream.Read(c.buf)
+	if err != nil {
+		return 0, err
 	}
+	decrypted, err := netcrypt.Decrypt(c.buf[:n], c.privkey, c.pubkey)
+	if err != nil {
+		return 0, err
+	}
+
+	return copy(b, decrypted), nil
+}
+
+func (c *Crypter) Write(b []byte) (int, error) {
+	encrypted, err := netcrypt.Encrypt(b, c.privkey, c.pubkey)
+	if err != nil {
+		return 0, err
+	}
+	_, err = c.downstream.Write(encrypted)
+	if err != nil {
+		return 0, err
+	}
+	return len(b), nil
+}
+
+func (c *Crypter) Close() error {
+	return c.downstream.Close()
 }

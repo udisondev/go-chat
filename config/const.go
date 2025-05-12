@@ -7,5 +7,5 @@ const (
 	CacheBucketsCount = 10
 	CacheBucketSize   = 5000
 	NonceLen          = 12
-	MazPeersCount     = 20
+	MaxPeersCount     = 20
 )

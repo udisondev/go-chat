@@ -1,4 +1,4 @@
-package crypto
+package netcrypt
 
 import (
 	"crypto/aes"

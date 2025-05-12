@@ -25,16 +25,9 @@ func With(
 	defer close(errCh)
 
 	go func() {
-		for written := 0; written < len(pubsign); {
-			n, err := rw.Write(pubsign[written:])
-			if err != nil {
-				errCh <- err
-				return
-			}
-			written += n
-		}
-		for written := 0; written < len(pubkey.Bytes()); {
-			n, err := rw.Write(pubkey.Bytes()[written:])
+		payload := append(pubsign, pubkey.Bytes()...)
+		for written := 0; written < len(payload); {
+			n, err := rw.Write(payload[written:])
 			if err != nil {
 				errCh <- err
 				return

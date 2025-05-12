@@ -3,10 +3,11 @@ package main
 import (
 	"context"
 	"flag"
-	"go-chat/config"
+	"go-chat/closer"
 	"go-chat/dispatcher"
+	"go-chat/handler"
+	"go-chat/model"
 	"go-chat/network"
-	"go-chat/upgrade"
 	"time"
 )
 
@@ -18,20 +19,30 @@ var (
 func main() {
 	flag.Parse()
 
-	d := dispatcher.New(config.MazPeersCount, nil)
+	inbox := make(chan model.Signal)
+	closer.Add(func() error { close(inbox); return nil })
 
-	u := upgrade.New(time.Second*5, &d)
+	d := dispatcher.New()
+	n := network.NewNode()
+	handler.RunConnector(n, d)
+
 	if attachAddr != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 		defer cancel()
-		err := network.Attach(ctx, *attachAddr, u.Upgrade)
+
+		p, err := n.Attach(ctx, *attachAddr)
+		d.Dispatch(p.Hash(), p)
+
 		if err != nil {
 			panic(err)
 		}
 	}
 
 	if listenAddr != nil {
-		err := network.Listen(*listenAddr, u.Upgrade)
+		handler := func(p *network.Peer) {
+			d.Dispatch(p.Hash(), p)
+		}
+		err := n.Listen(*listenAddr, time.Second*3, handler)
 		if err != nil {
 			panic(err)
 		}

@@ -3,41 +3,46 @@ package middleware
 import (
 	"bytes"
 	"crypto/sha256"
-	"log"
+	"errors"
+	"go-chat/config"
+	"go-chat/pack"
+	"io"
 )
 
-func ReadChecksum(input <-chan []byte) <-chan []byte {
-	output := make(chan []byte)
-
-	go func() {
-		defer close(output)
-
-		for in := range input {
-			checksum, payload := in[:sha256.Size], in[sha256.Size:]
-			actual := sha256.Sum256(payload)
-			if !bytes.Equal(checksum, actual[:]) {
-				log.Println("Checksum failed")
-				return
-			}
-			output <- payload
-		}
-	}()
-
-	return output
+type Sumchecker struct {
+	downstream io.ReadWriteCloser
+	buf        []byte
 }
 
-func WriteChecksum(input <-chan []byte) <-chan []byte {
+func Checksum(rwc io.ReadWriteCloser) io.ReadWriteCloser {
+	return &Sumchecker{
+		downstream: rwc,
+		buf:        make([]byte, config.MaxInputLen),
+	}
+}
 
-	output := make(chan []byte)
+func (s *Sumchecker) Read(b []byte) (int, error) {
+	n, err := pack.ReadFrom(s.downstream, s.buf)
+	if err != nil {
+		return n, err
+	}
+	checksum, payload := s.buf[:sha256.Size], s.buf[sha256.Size:n]
+	actual := sha256.Sum256(payload)
+	if !bytes.Equal(checksum, actual[:]) {
+		return 0, errors.New("invalid checksum")
+	}
+	return copy(b, payload), nil
+}
 
-	go func() {
-		defer close(output)
+func (s *Sumchecker) Write(b []byte) (int, error) {
+	sum := sha256.Sum256(b)
+	_, err := pack.WriteTo(s.downstream, append(sum[:], b...))
+	if err != nil {
+		return 0, err
+	}
+	return len(b), nil
+}
 
-		for in := range input {
-			sum := sha256.Sum256(in)
-			output <- append(sum[:], in...)
-		}
-	}()
-
-	return output
+func (s *Sumchecker) Close() error {
+	return s.downstream.Close()
 }
