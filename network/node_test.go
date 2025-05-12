@@ -55,8 +55,8 @@ func Test_NewPeer(t *testing.T) {
 	assert.NotNil(t, p)
 
 	t.Run("Write to peer", func(t *testing.T) {
-		text := rand.Text()
-
+		source := make([]byte, 12)
+		rand.Read(source)
 		wg := sync.WaitGroup{}
 		wg.Add(1)
 		go func() {
@@ -72,16 +72,17 @@ func Test_NewPeer(t *testing.T) {
 			assert.True(t, ed25519.Verify(n.pubsign, payload, sign))
 			decrypted, err := netcrypt.Decrypt(payload, pprivkey, n.privkey.PublicKey())
 			assert.NoError(t, err)
-			assert.Equal(t, []byte(text), decrypted)
+			assert.Equal(t, source, decrypted)
 
 		}()
-		p.Write([]byte(text))
+		p.Write(source)
 		wg.Wait()
 	})
 
 	t.Run("Read from peer", func(t *testing.T) {
-		text := rand.Text()
-		expected := []byte(text)
+		source := make([]byte, 12)
+		rand.Read(source)
+		expected := source
 		expected, _ = netcrypt.Encrypt(expected, pprivkey, n.privkey.PublicKey())
 		expected = append(ed25519.Sign(pprivsign, expected), expected...)
 		sum := sha256.Sum256(expected)
@@ -94,11 +95,37 @@ func Test_NewPeer(t *testing.T) {
 			buf := make([]byte, 1024)
 			n, err := p.Read(buf)
 			assert.NoError(t, err)
-			assert.Equal(t, []byte(text), buf[:n])
+			assert.Equal(t, source, buf[:n])
 		}()
 		pack.WriteTo(w, expected)
 		wg.Wait()
 	})
+}
+
+func Test_Connection(t *testing.T) {
+	serv := NewNode()
+	att := NewNode()
+
+	addr := "127.0.0.1:9782"
+	fromAtt := make([]byte, 12)
+	rand.Read(fromAtt)
+	fromServ := make([]byte, 12)
+	rand.Read(fromServ)
+	serv.Listen(addr, time.Second*3, func(p *Peer) {
+		buf := make([]byte, 1024)
+		n, err := p.Read(buf)
+		assert.NoError(t, err)
+		assert.Equal(t, fromAtt, buf[:n])
+		p.Write(fromServ)
+	})
+
+	p, err := att.Attach(t.Context(), addr)
+	assert.NoError(t, err)
+	p.Write(fromAtt)
+	buf := make([]byte, 1024)
+	n, err := p.Read(buf)
+	assert.NoError(t, err)
+	assert.Equal(t, fromServ, buf[:n])
 }
 
 func (r *rwcadapter) Close() error {
