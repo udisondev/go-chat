@@ -1,7 +1,6 @@
 package dispatcher
 
 import (
-	"context"
 	"go-chat/config"
 	"go-chat/model"
 	"io"
@@ -20,7 +19,10 @@ type Node struct {
 }
 
 func New() *Dispatcher {
-	return &Dispatcher{topics: map[model.SignalType][]chan model.Signal{}}
+	return &Dispatcher{
+		peers:  map[string]*Node{},
+		topics: map[model.SignalType][]chan model.Signal{},
+	}
 }
 
 func (d *Dispatcher) Subscribe(st model.SignalType) <-chan model.Signal {
@@ -28,12 +30,12 @@ func (d *Dispatcher) Subscribe(st model.SignalType) <-chan model.Signal {
 	if !ok {
 		subs = make([]chan model.Signal, 0, 1)
 	}
-	x := make(chan model.Signal, 100)
+	ch := make(chan model.Signal, 100)
 
-	subs = append(subs, x)
+	subs = append(subs, ch)
 	d.topics[st] = subs
 
-	return x
+	return ch
 }
 
 func (d *Dispatcher) Dispatch(hash []byte, rwc io.ReadWriteCloser) {
@@ -41,10 +43,12 @@ func (d *Dispatcher) Dispatch(hash []byte, rwc io.ReadWriteCloser) {
 	defer d.mu.Unlock()
 
 	outbox := make(chan []byte, 256)
+	stop := sync.OnceFunc(func() {
+		rwc.Close()
+	})
 
-	ctx, cancel := context.WithCancel(context.Background())
 	d.peers[string(hash)] = &Node{
-		close:  cancel,
+		close:  stop,
 		outbox: outbox,
 	}
 
@@ -53,26 +57,18 @@ func (d *Dispatcher) Dispatch(hash []byte, rwc io.ReadWriteCloser) {
 			d.mu.Lock()
 			defer d.mu.Unlock()
 			delete(d.peers, string(hash))
-			rwc.Close()
 		}()
 
-		for {
-			select {
-			case <-ctx.Done():
-			case out, ok := <-outbox:
-				if !ok {
-					return
-				}
-				_, err := rwc.Write(out)
-				if err != nil {
-					return
-				}
+		for out := range outbox {
+			_, err := rwc.Write(out)
+			if err != nil {
+				return
 			}
 		}
 	}()
 
 	go func() {
-		defer cancel()
+		defer stop()
 
 		buf := make([]byte, config.MaxInputLen)
 		for {
@@ -82,7 +78,8 @@ func (d *Dispatcher) Dispatch(hash []byte, rwc io.ReadWriteCloser) {
 			}
 			tmp := make([]byte, n)
 			copy(tmp, buf[:n])
-			s, err := model.FormatSignal(tmp)
+			var s model.Signal
+			err = s.Unmarshal(tmp)
 			if err != nil {
 				return
 			}
@@ -94,10 +91,10 @@ func (d *Dispatcher) Dispatch(hash []byte, rwc io.ReadWriteCloser) {
 	}()
 }
 
-func (d *Dispatcher) Disconnect(hash string) {
+func (d *Dispatcher) Disconnect(hash []byte) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	n, ok := d.peers[hash]
+	n, ok := d.peers[string(hash)]
 	if !ok {
 		return
 	}
