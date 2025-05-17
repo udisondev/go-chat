@@ -107,6 +107,14 @@ func (n *Node) Listen(addr string, connTimeout time.Duration, h Handler) error {
 	return nil
 }
 
+func (n *Node) Sign() (ed25519.PublicKey, ed25519.PrivateKey) {
+	return n.pubsign, n.privsign
+}
+
+func (n *Node) ECDH() *ecdh.PrivateKey {
+	return n.privkey
+}
+
 func (n *Node) Hash() []byte {
 	sum := sha256.Sum256(n.privkey.PublicKey().Bytes())
 	return sum[:]

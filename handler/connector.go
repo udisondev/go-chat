@@ -7,27 +7,31 @@ import (
 	"go-chat/model"
 	"go-chat/network"
 	"sync"
+	"time"
 )
 
 type Connector struct {
-	mu       sync.Mutex
-	hash     string
-	node     *network.Node
-	initq    map[string]*candidate
-	respondq map[string]*candidate
-	dspch    *dispatcher.Dispatcher
+	mu          sync.Mutex
+	node        *network.Node
+	initq       map[string]*candidate
+	respondq    map[string]*candidate
+	dspch       *dispatcher.Dispatcher
+	connTimeout time.Duration
 }
 
 type candidate struct {
-	privkey  *ecdh.PrivateKey
-	privsign ed25519.PrivateKey
-	pubsign  ed25519.PublicKey
-	ppubkey  *ecdh.PublicKey
-	ppubsign ed25519.PublicKey
+	pubkey  *ecdh.PublicKey
+	pubsign ed25519.PublicKey
 }
 
-func RunConnector(n *network.Node, d *dispatcher.Dispatcher) {
-	c := &Connector{dspch: d, node: n}
+func RunConnector(n *network.Node, d *dispatcher.Dispatcher) *Connector {
+	c := &Connector{
+		node:        n,
+		initq:       map[string]*candidate{},
+		respondq:    map[string]*candidate{},
+		dspch:       d,
+		connTimeout: time.Second * 10,
+	}
 
 	go func() {
 		for s := range d.Subscribe(model.SignalTypeNeedInvite) {
@@ -52,4 +56,6 @@ func RunConnector(n *network.Node, d *dispatcher.Dispatcher) {
 			c.HandleWaitAnswer(s)
 		}
 	}()
+
+	return c
 }
