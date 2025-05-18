@@ -2,16 +2,12 @@
 package model
 
 import (
+	"crypto/rand"
 	"errors"
 	"unsafe"
 )
 
-type Signal struct {
-	Payload   []byte
-	Type      SignalType
-	Recipient []byte
-	Author    []byte
-}
+type Signal []byte
 
 // ENUM(
 // NeedInnvite
@@ -21,53 +17,87 @@ type Signal struct {
 // )
 type SignalType uint8
 
+const (
+	TypeLen      = 1
+	KeyLen       = 16
+	NonceLen     = 16
+	AuthorLen    = 32
+	RecipientLen = 32
+
+	TypeStart      = 0
+	KeyStart       = TypeStart + TypeLen
+	NonceStart     = KeyStart + KeyLen
+	AuthorStart    = NonceStart + NonceLen
+	RecipientStart = AuthorStart + AuthorLen
+	PayloadStart   = RecipientStart + RecipientLen
+
+	MinLen = TypeLen + KeyLen + NonceLen + AuthorLen + RecipientLen
+)
+
 func FormatSignal(b []byte) (Signal, error) {
-	return Signal{}, nil
+	if len(b) < MinLen {
+		return nil, errors.New("too short")
+	}
+	return Signal(b), nil
 }
 
-func NewSignal(t SignalType, author, recipient, payload []byte) (Signal, error) {
-	if len(author) != 32 {
-		return Signal{}, errors.New("author is required")
+func NewSignal(t SignalType, key []byte, author, recipient, payload []byte) (Signal, error) {
+	if len(author) != AuthorLen {
+		return nil, errors.New("author is required")
 	}
-	if len(recipient) != 32 {
-		return Signal{}, errors.New("recipient is required")
+	if len(recipient) != RecipientLen {
+		return nil, errors.New("recipient is required")
 	}
-	return Signal{
-		Payload:   payload,
-		Type:      t,
-		Recipient: recipient,
-		Author:    author,
-	}, nil
-}
+	if len(key) != KeyLen {
+		return nil, errors.New("invalid key len")
+	}
 
-func (s Signal) Marshal() ([]byte, error) {
-	totalLen := 1 + 64 + len(s.Payload)
-	out := make([]byte, totalLen)
-	out[0] = byte(s.Type)
+	out := make([]byte, MinLen+len(payload))
+	out[0] = byte(t)
 	pos := 1
-	pos += copy(out[pos:], s.Author)
-	pos += copy(out[pos:], s.Recipient)
-	copy(out[pos:], s.Payload)
 
-	return out, nil
+	pos += copy(out[pos:], key)
+
+	rand.Read(out[pos : pos+NonceLen])
+	pos += NonceLen
+
+	pos += copy(out[pos:], author)
+	pos += copy(out[pos:], recipient)
+	copy(out[pos:], payload)
+
+	return Signal(out), nil
 }
 
-func (s *Signal) Unmarshal(b []byte) error {
-	if len(b) < 65 {
-		return errors.New("too short input")
-	}
-	pos := 0
-	s.Type = SignalType(b[pos])
-	pos++
-	s.Author = b[pos : pos+32]
-	pos += 32
-	s.Recipient = b[pos : pos+32]
-	pos += 32
-	s.Payload = b[pos:]
-
-	return nil
+func (s Signal) Type() SignalType {
+	return SignalType(s[TypeStart])
 }
 
-func (s *Signal) RecipientString() string {
-	return unsafe.String(&s.Recipient[0], len(s.Recipient))
+func (s Signal) Key() []byte {
+	return s[KeyStart:NonceStart]
+}
+
+func (s Signal) KeyString() string {
+	return unsafe.String(&s[KeyStart], KeyLen)
+}
+
+func (s Signal) NonceString() string {
+	return unsafe.String(&s[NonceStart], NonceLen)
+}
+
+func (s Signal) Author() []byte {
+	return s[AuthorStart:RecipientStart]
+}
+
+func (s Signal) RecipientString() string {
+	return unsafe.String(&s[RecipientStart], RecipientLen)
+}
+
+func (s Signal) Payload() []byte {
+	return s[PayloadStart:]
+}
+
+func GenerateKey() []byte {
+	key := make([]byte, KeyLen)
+	rand.Read(key)
+	return key
 }

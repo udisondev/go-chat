@@ -37,7 +37,7 @@ func Test_HandleNeedInvite(t *testing.T) {
 	pubsign, _, _ := ed25519.GenerateKey(rand.Reader)
 	payload := append(pubsign, privKey.PublicKey().Bytes()...)
 	s, _ := model.NewSignal(model.SignalTypeNeedInvite, author, hash, payload)
-	sb, _ := s.Marshal()
+	sb := []byte(s)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -49,15 +49,15 @@ func Test_HandleNeedInvite(t *testing.T) {
 		buf := make([]byte, 1024)
 		l, err := r.Read(buf)
 		assert.NoError(t, err)
-		var s model.Signal
-		err = s.Unmarshal(buf[:l])
+		s, err := model.FormatSignal(buf[:l])
 		assert.NoError(t, err)
-		signb, keyb := s.Payload[:ed25519.PublicKeySize], s.Payload[ed25519.PublicKeySize:]
+		signb, keyb := s.Payload()[:ed25519.PublicKeySize], s.Payload()[ed25519.PublicKeySize:]
 		ppubkey, err := ecdh.P256().NewPublicKey(keyb)
 		assert.NoError(t, err)
 		ppubsign := ed25519.PublicKey(signb)
 		assert.Equal(t, expectedKey, ppubkey)
 		assert.Equal(t, expectedSign, ppubsign)
+		assert.Equal(t, model.SignalTypeReadyToInvite, s.Type())
 	}()
 
 	w.Write(sb)

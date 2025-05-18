@@ -12,7 +12,7 @@ func (c *Connector) HandleNeedInvite(s model.Signal) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	signb, keyb := s.Payload[:ed25519.PublicKeySize], s.Payload[ed25519.PublicKeySize:]
+	signb, keyb := s.Payload()[:ed25519.PublicKeySize], s.Payload()[ed25519.PublicKeySize:]
 	ppubkey, err := ecdh.P256().NewPublicKey(keyb)
 	if err != nil {
 		log.Printf("handle need invite: parse pubkey: %v", err)
@@ -37,8 +37,9 @@ func (c *Connector) HandleNeedInvite(s model.Signal) {
 
 	out, err := model.NewSignal(
 		model.SignalTypeReadyToInvite,
+		s.Key(),
 		c.node.Hash(),
-		s.Author,
+		s.Author(),
 		append(pubsign, pubkey.Bytes()...),
 	)
 

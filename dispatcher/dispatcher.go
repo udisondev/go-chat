@@ -1,6 +1,7 @@
 package dispatcher
 
 import (
+	"context"
 	"go-chat/config"
 	"go-chat/model"
 	"io"
@@ -8,9 +9,12 @@ import (
 )
 
 type Dispatcher struct {
-	mu     sync.Mutex
-	peers  map[string]*Node
-	topics map[model.SignalType][]chan model.Signal
+	mu       sync.Mutex
+	peers    map[string]*Node
+	typemu   sync.Mutex
+	typesubs map[model.SignalType][]chan model.Signal
+	keymu    sync.Mutex
+	keysubs  map[string]chan model.Signal
 }
 
 type Node struct {
@@ -20,22 +24,47 @@ type Node struct {
 
 func New() *Dispatcher {
 	return &Dispatcher{
-		peers:  map[string]*Node{},
-		topics: map[model.SignalType][]chan model.Signal{},
+		peers:    map[string]*Node{},
+		typesubs: map[model.SignalType][]chan model.Signal{},
 	}
 }
 
-func (d *Dispatcher) Subscribe(st model.SignalType) <-chan model.Signal {
-	subs, ok := d.topics[st]
+func (d *Dispatcher) SubscribeType(st model.SignalType) <-chan model.Signal {
+	d.typemu.Lock()
+	defer d.typemu.Unlock()
+
+	subs, ok := d.typesubs[st]
 	if !ok {
 		subs = make([]chan model.Signal, 0, 1)
 	}
+	x := make(chan model.Signal, 100)
+
+	subs = append(subs, x)
+	d.typesubs[st] = subs
+
+	return x
+}
+
+func (d *Dispatcher) SubscribeKey(key string) <-chan model.Signal {
+	d.keymu.Lock()
+	defer d.keymu.Unlock()
+
 	ch := make(chan model.Signal, 100)
-
-	subs = append(subs, ch)
-	d.topics[st] = subs
-
+	d.keysubs[key] = ch
 	return ch
+}
+
+func (d *Dispatcher) UnsbribeKey(key string) {
+	d.keymu.Lock()
+	defer d.keymu.Unlock()
+
+	s, ok := d.keysubs[key]
+	if !ok {
+		return
+	}
+
+	close(s)
+	delete(d.keysubs, key)
 }
 
 func (d *Dispatcher) Dispatch(hash []byte, rwc io.ReadWriteCloser) {
@@ -43,12 +72,10 @@ func (d *Dispatcher) Dispatch(hash []byte, rwc io.ReadWriteCloser) {
 	defer d.mu.Unlock()
 
 	outbox := make(chan []byte, 256)
-	stop := sync.OnceFunc(func() {
-		rwc.Close()
-	})
 
+	ctx, cancel := context.WithCancel(context.Background())
 	d.peers[string(hash)] = &Node{
-		close:  stop,
+		close:  cancel,
 		outbox: outbox,
 	}
 
@@ -57,18 +84,27 @@ func (d *Dispatcher) Dispatch(hash []byte, rwc io.ReadWriteCloser) {
 			d.mu.Lock()
 			defer d.mu.Unlock()
 			delete(d.peers, string(hash))
+			rwc.Close()
 		}()
 
-		for out := range outbox {
-			_, err := rwc.Write(out)
-			if err != nil {
+		for {
+			select {
+			case <-ctx.Done():
 				return
+			case out, ok := <-outbox:
+				if !ok {
+					return
+				}
+				_, err := rwc.Write(out)
+				if err != nil {
+					return
+				}
 			}
 		}
 	}()
 
 	go func() {
-		defer stop()
+		defer cancel()
 
 		buf := make([]byte, config.MaxInputLen)
 		for {
@@ -78,15 +114,21 @@ func (d *Dispatcher) Dispatch(hash []byte, rwc io.ReadWriteCloser) {
 			}
 			tmp := make([]byte, n)
 			copy(tmp, buf[:n])
-			var s model.Signal
-			err = s.Unmarshal(tmp)
+			s, err := model.FormatSignal(tmp)
 			if err != nil {
 				return
 			}
 
-			for _, t := range d.topics[s.Type] {
-				t <- s
+			for _, typesub := range d.typesubs[s.Type()] {
+				typesub <- s
 			}
+
+			keysub, ok := d.keysubs[s.KeyString()]
+			if !ok {
+				continue
+			}
+
+			keysub <- s
 		}
 	}()
 }
@@ -102,13 +144,10 @@ func (d *Dispatcher) Disconnect(hash []byte) {
 }
 
 func (d *Dispatcher) Send(s model.Signal) {
-	b, err := s.Marshal()
-	if err != nil {
-		return
-	}
-
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
+	b := []byte(s)
 	n, ok := d.peers[s.RecipientString()]
 	if ok {
 		send(n, b)

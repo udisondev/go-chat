@@ -34,25 +34,25 @@ func RunConnector(n *network.Node, d *dispatcher.Dispatcher) *Connector {
 	}
 
 	go func() {
-		for s := range d.Subscribe(model.SignalTypeNeedInvite) {
+		for s := range d.SubscribeType(model.SignalTypeNeedInvite) {
 			c.HandleNeedInvite(s)
 		}
 	}()
 
 	go func() {
-		for s := range d.Subscribe(model.SignalTypeReadyToInvite) {
+		for s := range d.SubscribeType(model.SignalTypeReadyToInvite) {
 			c.HandleReadyToInvite(s)
 		}
 	}()
 
 	go func() {
-		for s := range d.Subscribe(model.SignalTypeWaitOffer) {
+		for s := range d.SubscribeType(model.SignalTypeWaitOffer) {
 			c.HandleWaitOffer(s)
 		}
 	}()
 
 	go func() {
-		for s := range d.Subscribe(model.SignalTypeWaitAnswer) {
+		for s := range d.SubscribeType(model.SignalTypeWaitAnswer) {
 			c.HandleWaitAnswer(s)
 		}
 	}()
