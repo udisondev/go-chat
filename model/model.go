@@ -10,28 +10,24 @@ import (
 type Signal []byte
 
 // ENUM(
-// NeedInnvite
-// ReadyToInvite
-// WaitOffer
-// WaitAnswer
+// NeedConnect
+// Offer
+// Answer
+// Candidate
 // )
 type SignalType uint8
 
 const (
-	TypeLen      = 1
-	KeyLen       = 16
-	NonceLen     = 16
-	AuthorLen    = 32
-	RecipientLen = 32
+	TypeLen  = 1
+	KeyLen   = 16
+	NonceLen = 16
 
-	TypeStart      = 0
-	KeyStart       = TypeStart + TypeLen
-	NonceStart     = KeyStart + KeyLen
-	AuthorStart    = NonceStart + NonceLen
-	RecipientStart = AuthorStart + AuthorLen
-	PayloadStart   = RecipientStart + RecipientLen
+	TypeStart    = 0
+	KeyStart     = TypeStart + TypeLen
+	NonceStart   = KeyStart + KeyLen
+	PayloadStart = NonceStart + NonceLen
 
-	MinLen = TypeLen + KeyLen + NonceLen + AuthorLen + RecipientLen
+	MinLen = TypeLen + KeyLen + NonceLen
 )
 
 func FormatSignal(b []byte) (Signal, error) {
@@ -41,13 +37,7 @@ func FormatSignal(b []byte) (Signal, error) {
 	return Signal(b), nil
 }
 
-func NewSignal(t SignalType, key []byte, author, recipient, payload []byte) (Signal, error) {
-	if len(author) != AuthorLen {
-		return nil, errors.New("author is required")
-	}
-	if len(recipient) != RecipientLen {
-		return nil, errors.New("recipient is required")
-	}
+func NewSignal(t SignalType, key []byte, payload []byte) (Signal, error) {
 	if len(key) != KeyLen {
 		return nil, errors.New("invalid key len")
 	}
@@ -61,8 +51,6 @@ func NewSignal(t SignalType, key []byte, author, recipient, payload []byte) (Sig
 	rand.Read(out[pos : pos+NonceLen])
 	pos += NonceLen
 
-	pos += copy(out[pos:], author)
-	pos += copy(out[pos:], recipient)
 	copy(out[pos:], payload)
 
 	return Signal(out), nil
@@ -82,14 +70,6 @@ func (s Signal) KeyString() string {
 
 func (s Signal) NonceString() string {
 	return unsafe.String(&s[NonceStart], NonceLen)
-}
-
-func (s Signal) Author() []byte {
-	return s[AuthorStart:RecipientStart]
-}
-
-func (s Signal) RecipientString() string {
-	return unsafe.String(&s[RecipientStart], RecipientLen)
 }
 
 func (s Signal) Payload() []byte {

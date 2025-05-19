@@ -12,25 +12,25 @@ import (
 )
 
 const (
-	// SignalTypeNeedInvite is a SignalType of type NeedInnvite.
-	SignalTypeNeedInvite SignalType = iota
-	// SignalTypeReadyToInvite is a SignalType of type ReadyToInvite.
-	SignalTypeReadyToInvite
-	// SignalTypeWaitOffer is a SignalType of type WaitOffer.
-	SignalTypeWaitOffer
-	// SignalTypeWaitAnswer is a SignalType of type WaitAnswer.
-	SignalTypeWaitAnswer
+	// SignalTypeNeedConnect is a SignalType of type NeedConnect.
+	SignalTypeNeedConnect SignalType = iota
+	// SignalTypeOffer is a SignalType of type Offer.
+	SignalTypeOffer
+	// SignalTypeAnswer is a SignalType of type Answer.
+	SignalTypeAnswer
+	// SignalTypeCandidate is a SignalType of type Candidate.
+	SignalTypeCandidate
 )
 
 var ErrInvalidSignalType = errors.New("not a valid SignalType")
 
-const _SignalTypeName = "NeedInnviteReadyToInviteWaitOfferWaitAnswer"
+const _SignalTypeName = "NeedConnectOfferAnswerCandidate"
 
 var _SignalTypeMap = map[SignalType]string{
-	SignalTypeNeedInvite:   _SignalTypeName[0:11],
-	SignalTypeReadyToInvite: _SignalTypeName[11:24],
-	SignalTypeWaitOffer:     _SignalTypeName[24:33],
-	SignalTypeWaitAnswer:    _SignalTypeName[33:43],
+	SignalTypeNeedConnect: _SignalTypeName[0:11],
+	SignalTypeOffer:       _SignalTypeName[11:16],
+	SignalTypeAnswer:      _SignalTypeName[16:22],
+	SignalTypeCandidate:   _SignalTypeName[22:31],
 }
 
 // String implements the Stringer interface.
@@ -49,10 +49,10 @@ func (x SignalType) IsValid() bool {
 }
 
 var _SignalTypeValue = map[string]SignalType{
-	_SignalTypeName[0:11]:  SignalTypeNeedInvite,
-	_SignalTypeName[11:24]: SignalTypeReadyToInvite,
-	_SignalTypeName[24:33]: SignalTypeWaitOffer,
-	_SignalTypeName[33:43]: SignalTypeWaitAnswer,
+	_SignalTypeName[0:11]:  SignalTypeNeedConnect,
+	_SignalTypeName[11:16]: SignalTypeOffer,
+	_SignalTypeName[16:22]: SignalTypeAnswer,
+	_SignalTypeName[22:31]: SignalTypeCandidate,
 }
 
 // ParseSignalType attempts to convert a string to a SignalType.

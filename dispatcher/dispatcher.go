@@ -148,12 +148,6 @@ func (d *Dispatcher) Send(s model.Signal) {
 	defer d.mu.Unlock()
 
 	b := []byte(s)
-	n, ok := d.peers[s.RecipientString()]
-	if ok {
-		send(n, b)
-		return
-	}
-
 	for _, n := range d.peers {
 		send(n, b)
 	}

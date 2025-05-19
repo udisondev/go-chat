@@ -5,7 +5,6 @@ import (
 	"flag"
 	"go-chat/closer"
 	"go-chat/dispatcher"
-	"go-chat/handler"
 	"go-chat/model"
 	"go-chat/network"
 	"time"
@@ -23,26 +22,24 @@ func main() {
 	closer.Add(func() error { close(inbox); return nil })
 
 	d := dispatcher.New()
-	n := network.NewNode()
-	handler.RunConnector(n, d)
 
 	if attachAddr != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 		defer cancel()
 
-		p, err := n.Attach(ctx, *attachAddr)
-		d.Dispatch(p.Hash(), p)
-
+		p, err := network.Attach(ctx, *attachAddr)
 		if err != nil {
 			panic(err)
 		}
+
+		d.Dispatch(p.Hash(), p)
 	}
 
 	if listenAddr != nil {
 		handler := func(p *network.Peer) {
 			d.Dispatch(p.Hash(), p)
 		}
-		err := n.Listen(*listenAddr, time.Second*3, handler)
+		err := network.Listen(*listenAddr, time.Second*3, handler)
 		if err != nil {
 			panic(err)
 		}

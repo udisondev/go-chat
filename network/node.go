@@ -17,35 +17,12 @@ import (
 
 type Handler func(*Peer)
 
-type Node struct {
-	privkey  *ecdh.PrivateKey
-	privsign ed25519.PrivateKey
-	pubsign  ed25519.PublicKey
-}
-
-func NewNode() *Node {
-	privkey, err := ecdh.P256().GenerateKey(rand.Reader)
-	if err != nil {
-		panic(err)
-	}
-	pubsign, privsign, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		panic(err)
-	}
-
-	return &Node{
-		privkey:  privkey,
-		privsign: privsign,
-		pubsign:  pubsign,
-	}
-}
-
 type Peer struct {
 	io.ReadWriteCloser
 	hash []byte
 }
 
-func (n *Node) Attach(ctx context.Context, addr string) (*Peer, error) {
+func Attach(ctx context.Context, addr string) (*Peer, error) {
 	d := net.Dialer{}
 	conn, err := d.DialContext(ctx, "tcp", addr)
 	closer.Add(conn.Close)
@@ -53,17 +30,33 @@ func (n *Node) Attach(ctx context.Context, addr string) (*Peer, error) {
 		return nil, err
 	}
 
-	return n.NewPeer(ctx, conn)
+	key, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+
+	pubsign, privsign, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+
+	return UpgradeConn(ctx, key, pubsign, privsign, conn)
 }
 
-func (n *Node) NewPeer(ctx context.Context, rwc io.ReadWriteCloser) (*Peer, error) {
-	h, err := handshake.With(ctx, rwc, n.privkey.PublicKey(), n.pubsign)
+func UpgradeConn(
+	ctx context.Context,
+	key *ecdh.PrivateKey,
+	pubsign ed25519.PublicKey,
+	privsign ed25519.PrivateKey,
+	rwc io.ReadWriteCloser,
+) (*Peer, error) {
+	h, err := handshake.With(ctx, rwc, key.PublicKey(), pubsign)
 	if err != nil {
 		return nil, err
 	}
 	rwc = middleware.Checksum(rwc)
-	rwc = middleware.SignCheck(n.privsign, h.PubSign, rwc)
-	rwc = middleware.Crypt(n.privkey, h.PubKey, rwc)
+	rwc = middleware.SignCheck(privsign, h.PubSign, rwc)
+	rwc = middleware.Crypt(key, h.PubKey, rwc)
 
 	sum := sha256.Sum256(h.PubKey.Bytes())
 
@@ -73,7 +66,17 @@ func (n *Node) NewPeer(ctx context.Context, rwc io.ReadWriteCloser) (*Peer, erro
 	}, nil
 }
 
-func (n *Node) Listen(addr string, connTimeout time.Duration, h Handler) error {
+func Listen(addr string, connTimeout time.Duration, h Handler) error {
+	key, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+
+	pubsign, privsign, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+
 	listenAddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
 		return err
@@ -94,7 +97,7 @@ func (n *Node) Listen(addr string, connTimeout time.Duration, h Handler) error {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), connTimeout)
 				defer cancel()
-				p, err := n.NewPeer(ctx, c)
+				p, err := UpgradeConn(ctx, key, pubsign, privsign, c)
 				if err != nil {
 					c.Close()
 					return
@@ -105,19 +108,6 @@ func (n *Node) Listen(addr string, connTimeout time.Duration, h Handler) error {
 	}()
 
 	return nil
-}
-
-func (n *Node) Sign() (ed25519.PublicKey, ed25519.PrivateKey) {
-	return n.pubsign, n.privsign
-}
-
-func (n *Node) ECDH() *ecdh.PrivateKey {
-	return n.privkey
-}
-
-func (n *Node) Hash() []byte {
-	sum := sha256.Sum256(n.privkey.PublicKey().Bytes())
-	return sum[:]
 }
 
 func (p *Peer) Hash() []byte {
